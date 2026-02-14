@@ -335,6 +335,7 @@ private fun ApiKeysCard(
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun MiraSettingsCard(
     baseUrl: String,
