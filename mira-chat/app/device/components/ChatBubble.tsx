@@ -1,5 +1,8 @@
 "use client";
 
+import { useState } from "react";
+import ThinkingStepper, { StepInfo } from "./ThinkingStepper";
+
 export interface ChatMessage {
   id: string;
   role: "user" | "assistant" | "system";
@@ -7,6 +10,9 @@ export interface ChatMessage {
   timestamp: Date;
   action?: "FIND_OBJECT" | "ESCALATE" | "ANSWER";
   isLoading?: boolean;
+  // Stepper fields
+  steps?: StepInfo[];
+  stepsFinished?: boolean;
 }
 
 interface ChatBubbleProps {
@@ -14,7 +20,8 @@ interface ChatBubbleProps {
 }
 
 export default function ChatBubble({ message }: ChatBubbleProps) {
-  const { role, content, isLoading, action } = message;
+  const { role, content, isLoading, action, steps, stepsFinished } = message;
+  const [stepperExpanded, setStepperExpanded] = useState(true);
 
   if (isLoading) {
     return (
@@ -32,7 +39,7 @@ export default function ChatBubble({ message }: ChatBubbleProps) {
               <path d="M19 10H5a2 2 0 0 0-2 2v1a8 8 0 0 0 8 8h2a8 8 0 0 0 8-8v-1a2 2 0 0 0-2-2Z" />
             </svg>
           </div>
-          <div className="bg-white rounded-2xl rounded-tl-md px-5 py-3.5 shadow-sm border border-slate-100">
+          <div className="bg-white border border-slate-200 rounded-2xl rounded-tl-md px-5 py-3.5 shadow-sm">
             <div className="flex items-center gap-2">
               <span className="w-2 h-2 bg-teal-400 rounded-full typing-dot" />
               <span className="w-2 h-2 bg-teal-400 rounded-full typing-dot" />
@@ -78,7 +85,7 @@ export default function ChatBubble({ message }: ChatBubbleProps) {
     );
   }
 
-  // Assistant
+  // Assistant - with optional stepper
   return (
     <div className="flex justify-start chat-bubble-enter py-1.5">
       <div className="flex gap-3 max-w-[85%]">
@@ -94,18 +101,35 @@ export default function ChatBubble({ message }: ChatBubbleProps) {
             <path d="M19 10H5a2 2 0 0 0-2 2v1a8 8 0 0 0 8 8h2a8 8 0 0 0 8-8v-1a2 2 0 0 0-2-2Z" />
           </svg>
         </div>
-        <div>
-          <div className="bg-white rounded-2xl rounded-tl-md px-5 py-3 shadow-sm border border-slate-100">
-            <p className="text-[15px] leading-relaxed text-slate-700">
-              {content}
-            </p>
-          </div>
-          <div className="text-[10px] text-slate-400 mt-1.5 ml-1 font-medium">
-            {message.timestamp.toLocaleTimeString([], {
-              hour: "2-digit",
-              minute: "2-digit",
-            })}
-          </div>
+        <div className="flex flex-col gap-2 min-w-0">
+          {/* Thinking stepper */}
+          {steps && steps.length > 0 && (
+            <ThinkingStepper
+              steps={steps}
+              expanded={stepperExpanded}
+              onToggle={() => setStepperExpanded((e) => !e)}
+              finished={stepsFinished ?? false}
+            />
+          )}
+
+          {/* Text reply (only if we have content) */}
+          {content && (
+            <div className="bg-white rounded-2xl rounded-tl-md px-5 py-3 shadow-sm border border-slate-100">
+              <p className="text-[15px] leading-relaxed text-slate-700">
+                {content}
+              </p>
+            </div>
+          )}
+
+          {/* Timestamp */}
+          {content && (
+            <div className="text-[10px] text-slate-400 ml-1 font-medium">
+              {message.timestamp.toLocaleTimeString([], {
+                hour: "2-digit",
+                minute: "2-digit",
+              })}
+            </div>
+          )}
         </div>
       </div>
     </div>
