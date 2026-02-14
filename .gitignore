@@ -1,1 +1,10 @@
 notes.md
+data/
+*.glb
+*.pkl
+*.png
+*.mp4
+*.pyc
+__pycache__/
+explorer/debug_renders/
+depthanything/repo/

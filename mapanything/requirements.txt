@@ -1,0 +1,6 @@
+numpy
+trimesh
+viser==0.2.23
+fastapi
+uvicorn[standard]
+jinja2
