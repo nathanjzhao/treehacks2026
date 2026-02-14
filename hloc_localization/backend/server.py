@@ -48,6 +48,22 @@ class ServerState:
 state = ServerState()
 
 
+@app.get("/")
+async def root():
+    return {
+        "service": "hloc Localization Server",
+        "endpoints": {
+            "GET /": "This page",
+            "GET /reference/status": "List available reference maps",
+            "POST /reference/select/{name}": "Activate a reference map",
+            "POST /reference/build": "Upload video to build a new reference map",
+            "POST /localize": "Upload a JPEG frame, get 6DoF pose",
+            "WS /stream": "Stream frames in, stream poses out",
+        },
+        "active_reference": state.reference_name,
+    }
+
+
 def _load_reference(name: str) -> bytes | None:
     """Load a reference tar from disk."""
     tar_path = REF_DIR / name / "reference.tar.gz"
