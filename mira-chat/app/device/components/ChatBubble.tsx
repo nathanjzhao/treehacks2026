@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import ThinkingStepper, { StepInfo } from "./ThinkingStepper";
 
 export interface ChatMessage {
@@ -24,6 +24,14 @@ interface ChatBubbleProps {
 export default function ChatBubble({ message }: ChatBubbleProps) {
   const { role, content, isLoading, action, steps, stepsFinished, citations } = message;
   const [stepperExpanded, setStepperExpanded] = useState(true);
+
+  // Auto-collapse stepper once response arrives
+  useEffect(() => {
+    if (stepsFinished && content) {
+      const t = setTimeout(() => setStepperExpanded(false), 600);
+      return () => clearTimeout(t);
+    }
+  }, [stepsFinished, content]);
 
   if (isLoading) {
     return (

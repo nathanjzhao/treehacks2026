@@ -455,7 +455,7 @@ export default function StreamPage() {
   const [showEscalation, setShowEscalation] = useState(false);
   const [input, setInput] = useState("");
   const [clock, setClock] = useState<Date | null>(null);
-  const [liveMode, setLiveMode] = useState(false);
+  const [liveMode, setLiveMode] = useState(true);
   const [videoReady, setVideoReady] = useState(false);
   const [videoError, setVideoError] = useState<string | null>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
@@ -553,13 +553,59 @@ export default function StreamPage() {
             setMessages((p) => [...p, { role: "user", text: ev.receipt_text || "...", time: new Date(ev.created_at) }]);
           } else if (ev.type === "CHAT_ASSISTANT_RESPONSE") {
             const pl = ev.payload as Record<string, unknown> | undefined;
-            setMessages((p) => [...p, {
-              role: "assistant",
-              text: ev.receipt_text || "...",
-              type: pl?.action === "ESCALATE" ? "escalation" : pl?.action === "FIND_OBJECT" ? "object_found" : "info",
-              citations: pl?.citations as AssistantMsg["citations"],
-              time: new Date(ev.created_at),
-            }]);
+            const steps = (pl?.steps as string[]) || [];
+
+            if (steps.length > 0) {
+              // Animate through steps in HUD stepper, then show reply
+              const mid = ++pidRef.current;
+              const hudSteps: Step[] = steps.map((label) => ({
+                label,
+                icon: mapStepToIcon(label),
+                duration: 400,
+              }));
+              setProcessing({ id: mid, steps: hudSteps, currentStep: 0, chain: { steps: hudSteps, reply: "", type: "info" }, finished: false });
+              setExpandedSteppers((p) => ({ ...p, [mid]: true }));
+
+              // Fast-forward through steps
+              let si = 0;
+              const advance = () => {
+                if (si < hudSteps.length) {
+                  si++;
+                  setTimeout(() => {
+                    setProcessing((p) => (p && p.id === mid ? { ...p, currentStep: si } : p));
+                    advance();
+                  }, 350);
+                } else {
+                  setProcessing((p) => (p && p.id === mid ? { ...p, finished: true } : p));
+                  setTimeout(() => {
+                    setMessages((p) => [
+                      ...p,
+                      { role: "thinking" as const, steps: hudSteps, id: mid, time: new Date() },
+                      {
+                        role: "assistant" as const,
+                        text: ev.receipt_text || "...",
+                        type: pl?.action === "ESCALATE" ? "escalation" : pl?.action === "FIND_OBJECT" ? "object_found" : "info",
+                        citations: pl?.citations as AssistantMsg["citations"],
+                        time: new Date(ev.created_at),
+                      },
+                    ]);
+                    setExpandedSteppers((p) => ({ ...p, [mid]: false }));
+                    setProcessing(null);
+                  }, 400);
+                }
+              };
+              advance();
+            } else {
+              // No steps — just show the reply
+              setMessages((p) => [...p, {
+                role: "assistant",
+                text: ev.receipt_text || "...",
+                type: pl?.action === "ESCALATE" ? "escalation" : pl?.action === "FIND_OBJECT" ? "object_found" : "info",
+                citations: pl?.citations as AssistantMsg["citations"],
+                time: new Date(ev.created_at),
+              }]);
+            }
+
             if (pl?.action === "ESCALATE") {
               setShowEscalation(true);
               setTimeout(() => setShowEscalation(false), 4000);

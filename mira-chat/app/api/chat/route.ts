@@ -653,6 +653,7 @@ export async function POST(request: NextRequest) {
   const stream = new ReadableStream({
     async start(controller) {
       let stepIndex = 0;
+      const stepLabels: string[] = [];
 
       const send = (data: Record<string, any>) => {
         controller.enqueue(
@@ -667,7 +668,10 @@ export async function POST(request: NextRequest) {
         searches?: string[]
       ) => {
         send({ type: "step", index: stepIndex, label, status, detail, searches });
-        if (status === "active") stepIndex++;
+        if (status === "active") {
+          stepLabels.push(label);
+          stepIndex++;
+        }
       };
 
       const markDone = (index: number) => {
@@ -836,6 +840,7 @@ export async function POST(request: NextRequest) {
           payload: {
             action,
             linked_user_event_id: userEvent.id,
+            steps: stepLabels,
             ...(object_name ? { object_name } : {}),
             ...(request_id ? { request_id } : {}),
             ...(citations.length > 0 ? { citations } : {}),
