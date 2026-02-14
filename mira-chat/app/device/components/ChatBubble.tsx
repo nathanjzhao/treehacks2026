@@ -1,7 +1,9 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { Streamdown } from "streamdown";
 import ThinkingStepper, { StepInfo } from "./ThinkingStepper";
+import CitationCard from "@/app/components/CitationCard";
 
 export interface ChatMessage {
   id: string;
@@ -124,25 +126,17 @@ export default function ChatBubble({ message }: ChatBubbleProps) {
 
           {/* Text reply (only if we have content) */}
           {content && (
-            <div className="bg-white rounded-2xl rounded-tl-md px-5 py-3 shadow-sm border border-slate-100">
-              <p className="text-[15px] leading-relaxed text-slate-700">
+            <div className="bg-white rounded-2xl rounded-tl-md px-5 py-3 shadow-sm border border-slate-100 prose prose-sm prose-slate max-w-none">
+              <Streamdown mode={stepsFinished ? "static" : undefined}>
                 {content}
-              </p>
+              </Streamdown>
               {citations && citations.length > 0 && (
-                <div className="mt-3 pt-2 border-t border-slate-100 space-y-1">
+                <div className="mt-3 pt-2 border-t border-slate-100 space-y-1.5">
                   <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
                     Sources
                   </div>
                   {citations.map((c, i) => (
-                    <a
-                      key={i}
-                      href={c.url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="block text-[12px] text-teal-600 hover:text-teal-700 hover:underline truncate"
-                    >
-                      {c.title || (() => { try { return new URL(c.url).hostname; } catch { return c.url; } })()}
-                    </a>
+                    <CitationCard key={i} citation={c} variant="light" />
                   ))}
                 </div>
               )}

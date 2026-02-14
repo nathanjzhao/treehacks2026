@@ -203,6 +203,12 @@ async function callSonar(
   const choice = data.choices?.[0];
   const answer = choice?.message?.content || "No results found.";
 
+  // Log token usage
+  const usage = data.usage;
+  if (usage) {
+    console.log(`[Sonar] tokens: ${usage.prompt_tokens}in + ${usage.completion_tokens}out = ${usage.total_tokens} | cost: $${(usage.cost ?? 0).toFixed(4)} | model: perplexity/sonar`);
+  }
+
   // Sonar returns citations in the top-level response
   const rawCitations = data.citations || [];
   const citations: Array<{ title?: string; url: string }> = rawCitations.map(
@@ -425,6 +431,12 @@ async function callLLM(
   const data = await res.json();
   const choice = data.choices?.[0];
 
+  // Log token usage
+  const usage = data.usage;
+  if (usage) {
+    console.log(`[LLM] tokens: ${usage.prompt_tokens}in + ${usage.completion_tokens}out = ${usage.total_tokens} | cost: $${(usage.cost ?? 0).toFixed(4)} | model: gpt-4o-mini | tools: ${includeTools}`);
+  }
+
   return {
     reply: choice?.message?.content || "",
     toolCalls: choice?.message?.tool_calls || [],
@@ -492,12 +504,18 @@ async function callLLMStreaming(
           fullReply += delta;
           onChunk(delta);
         }
+        // Capture usage from final chunk (OpenRouter includes it)
+        if (parsed.usage) {
+          const u = parsed.usage;
+          console.log(`[LLM-Stream] tokens: ${u.prompt_tokens}in + ${u.completion_tokens}out = ${u.total_tokens} | cost: $${(u.cost ?? 0).toFixed(4)} | model: gpt-4o-mini`);
+        }
       } catch {
         // skip malformed chunk
       }
     }
   }
 
+  console.log(`[LLM-Stream] reply length: ${fullReply.length} chars`);
   return fullReply;
 }
 

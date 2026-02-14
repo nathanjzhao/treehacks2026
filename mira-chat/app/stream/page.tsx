@@ -3,6 +3,8 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { supabase, MiraEvent } from "@/lib/supabase/client";
 import { useDetection, DetectionOverlay } from "@/yolo";
+import { Streamdown } from "streamdown";
+import CitationCard from "@/app/components/CitationCard";
 
 /* ================================================================
    ACTION CHAINS — scripted demos for hackathon presentation
@@ -404,6 +406,249 @@ function EscalationToast({ visible }: { visible: boolean }) {
 }
 
 /* ================================================================
+   Activity Feed — always-visible tool call log on left side of HUD
+   ================================================================ */
+
+function ActivityFeed({
+  steps,
+  currentStep,
+  finished,
+}: {
+  steps: Step[];
+  currentStep: number;
+  finished: boolean;
+}) {
+  const feedRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    feedRef.current?.scrollTo({ top: feedRef.current.scrollHeight, behavior: "smooth" });
+  }, [currentStep, finished]);
+
+  if (steps.length === 0) return null;
+
+  return (
+    <div
+      className="hud-fadein"
+      style={{
+        background: "rgba(0,0,0,0.55)",
+        backdropFilter: "blur(20px)",
+        WebkitBackdropFilter: "blur(20px)",
+        border: "1px solid rgba(120,255,200,0.12)",
+        borderRadius: 10,
+        overflow: "hidden",
+        maxHeight: 200,
+      }}
+    >
+      {/* Header */}
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 6,
+          padding: "6px 12px",
+          borderBottom: "1px solid rgba(120,255,200,0.08)",
+        }}
+      >
+        <div
+          style={{
+            width: 6,
+            height: 6,
+            borderRadius: "50%",
+            background: finished ? "rgba(120,255,200,0.8)" : "rgba(255,200,60,0.8)",
+            boxShadow: finished ? "none" : "0 0 6px rgba(255,200,60,0.4)",
+            animation: finished ? "none" : "hud-pulse-kf 1.5s ease-in-out infinite",
+          }}
+        />
+        <span
+          style={{
+            fontSize: 10,
+            fontWeight: 700,
+            color: "rgba(120,255,200,0.6)",
+            fontFamily: "'DM Mono', monospace",
+            letterSpacing: "0.08em",
+          }}
+        >
+          ACTIVITY
+        </span>
+        <span
+          style={{
+            fontSize: 10,
+            color: "rgba(255,255,255,0.3)",
+            fontFamily: "'DM Mono', monospace",
+            marginLeft: "auto",
+          }}
+        >
+          {finished ? `${steps.length}/${steps.length}` : `${currentStep}/${steps.length}`}
+        </span>
+      </div>
+
+      {/* Feed lines */}
+      <div ref={feedRef} style={{ overflowY: "auto", maxHeight: 164, padding: "4px 0" }}>
+        {steps.map((step, i) => {
+          const done = finished || i < currentStep;
+          const active = !finished && i === currentStep;
+          const pending = !finished && i > currentStep;
+
+          return (
+            <div
+              key={i}
+              className={active ? "hud-fadein" : ""}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
+                padding: "3px 12px",
+                opacity: pending ? 0.2 : 1,
+                transition: "opacity 0.3s ease",
+              }}
+            >
+              {/* Status indicator */}
+              <div style={{ width: 16, flexShrink: 0, display: "flex", justifyContent: "center" }}>
+                {done ? (
+                  <svg width="10" height="10" viewBox="0 0 24 24" fill="none">
+                    <path d="M5 13l4 4L19 7" stroke="rgba(120,255,200,0.7)" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                ) : active ? (
+                  <span className="hud-pulse" style={{ display: "inline-block", width: 6, height: 6, borderRadius: "50%", background: "rgba(255,200,60,0.8)" }} />
+                ) : (
+                  <span style={{ display: "inline-block", width: 4, height: 4, borderRadius: "50%", background: "rgba(255,255,255,0.15)" }} />
+                )}
+              </div>
+
+              {/* Icon */}
+              <StepIcon type={step.icon} done={done} active={active} />
+
+              {/* Label */}
+              <span
+                style={{
+                  fontSize: 12,
+                  fontFamily: "'DM Mono', monospace",
+                  fontWeight: active ? 600 : 400,
+                  color: done ? "rgba(120,255,200,0.8)" : active ? "rgba(255,255,255,0.9)" : "rgba(255,255,255,0.2)",
+                  flex: 1,
+                  minWidth: 0,
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                {step.label}
+              </span>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+/* ================================================================
+   Audio Waveform — canvas-based frequency visualization
+   ================================================================ */
+
+function AudioWaveform({ active }: { active: boolean }) {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const analyserRef = useRef<AnalyserNode | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const animRef = useRef<number>(0);
+  const audioCtxRef = useRef<AudioContext | null>(null);
+
+  useEffect(() => {
+    if (!active) {
+      cancelAnimationFrame(animRef.current);
+      streamRef.current?.getTracks().forEach((t) => t.stop());
+      streamRef.current = null;
+      analyserRef.current = null;
+      if (audioCtxRef.current) {
+        audioCtxRef.current.close().catch(() => {});
+        audioCtxRef.current = null;
+      }
+      const canvas = canvasRef.current;
+      if (canvas) {
+        const ctx = canvas.getContext("2d");
+        if (ctx) ctx.clearRect(0, 0, canvas.width, canvas.height);
+      }
+      return;
+    }
+
+    let cancelled = false;
+
+    async function start() {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        if (cancelled) {
+          stream.getTracks().forEach((t) => t.stop());
+          return;
+        }
+        streamRef.current = stream;
+
+        const audioCtx = new AudioContext();
+        audioCtxRef.current = audioCtx;
+        const source = audioCtx.createMediaStreamSource(stream);
+        const analyser = audioCtx.createAnalyser();
+        analyser.fftSize = 64;
+        analyser.smoothingTimeConstant = 0.8;
+        source.connect(analyser);
+        analyserRef.current = analyser;
+
+        const dataArray = new Uint8Array(analyser.frequencyBinCount);
+        const canvas = canvasRef.current!;
+        const ctx = canvas.getContext("2d")!;
+
+        function draw() {
+          if (cancelled) return;
+          animRef.current = requestAnimationFrame(draw);
+          analyser.getByteFrequencyData(dataArray);
+
+          ctx.clearRect(0, 0, canvas.width, canvas.height);
+          const barCount = dataArray.length;
+          const barWidth = canvas.width / barCount;
+          const centerY = canvas.height / 2;
+
+          for (let i = 0; i < barCount; i++) {
+            const v = dataArray[i] / 255;
+            const barHeight = v * centerY * 0.9;
+            const x = i * barWidth;
+            const alpha = 0.3 + v * 0.6;
+            ctx.fillStyle = `rgba(120, 255, 200, ${alpha})`;
+            ctx.fillRect(x + 1, centerY - barHeight, barWidth - 2, barHeight);
+            ctx.fillRect(x + 1, centerY, barWidth - 2, barHeight);
+          }
+        }
+        draw();
+      } catch (err) {
+        console.error("Audio waveform error:", err);
+      }
+    }
+
+    start();
+    return () => {
+      cancelled = true;
+      cancelAnimationFrame(animRef.current);
+      streamRef.current?.getTracks().forEach((t) => t.stop());
+      streamRef.current = null;
+      if (audioCtxRef.current) {
+        audioCtxRef.current.close().catch(() => {});
+        audioCtxRef.current = null;
+      }
+    };
+  }, [active]);
+
+  return (
+    <canvas
+      ref={canvasRef}
+      width={200}
+      height={48}
+      style={{
+        opacity: active ? 1 : 0,
+        transition: "opacity 0.3s ease",
+        pointerEvents: "none",
+      }}
+    />
+  );
+}
+
+/* ================================================================
    Message types
    ================================================================ */
 
@@ -581,7 +826,7 @@ export default function StreamPage() {
               setProcessing({ id: mid, steps: hudSteps, currentStep: 0, chain: { steps: hudSteps, reply: "", type: "info" }, finished: false });
               setExpandedSteppers((p) => ({ ...p, [mid]: true }));
 
-              // Fast-forward through steps
+              // Animate through steps with visible pacing
               let si = 0;
               const advance = () => {
                 if (si < hudSteps.length) {
@@ -589,7 +834,7 @@ export default function StreamPage() {
                   setTimeout(() => {
                     setProcessing((p) => (p && p.id === mid ? { ...p, currentStep: si } : p));
                     advance();
-                  }, 350);
+                  }, 800);
                 } else {
                   setProcessing((p) => (p && p.id === mid ? { ...p, finished: true } : p));
                   setTimeout(() => {
@@ -606,7 +851,7 @@ export default function StreamPage() {
                     ]);
                     setExpandedSteppers((p) => ({ ...p, [mid]: false }));
                     setProcessing(null);
-                  }, 400);
+                  }, 2000);
                 }
               };
               advance();
@@ -924,9 +1169,30 @@ export default function StreamPage() {
         )}
       </div>
 
+      {/* ──── LEFT: Activity Feed ──── */}
+      {processing && (
+        <div
+          className="hud-fadein"
+          style={{
+            position: "absolute",
+            bottom: 240,
+            left: 56,
+            width: 320,
+            zIndex: 15,
+          }}
+        >
+          <ActivityFeed
+            steps={processing.steps}
+            currentStep={processing.currentStep}
+            finished={processing.finished}
+          />
+        </div>
+      )}
+
       {/* ──── CHAT OVERLAY ──── */}
-      <div style={{ position: "absolute", bottom: 28, right: 28, top: 80, width: 400, zIndex: 20, display: "flex", flexDirection: "column" }}>
-        <div style={{ flex: 1, overflowY: "auto", display: "flex", flexDirection: "column", justifyContent: "flex-end", gap: 6, paddingBottom: 8 }}>
+      <div style={{ position: "absolute", bottom: 28, right: 28, top: 80, width: 440, zIndex: 20, display: "flex", flexDirection: "column" }}>
+        <div style={{ flex: 1, overflowY: "auto", display: "flex", flexDirection: "column", gap: 8, paddingBottom: 8 }}>
+          <div style={{ flex: 1 }} />
           {messages.map((msg, i) => {
             if (msg.role === "thinking") {
               const tm = msg as ThinkingMsg;
@@ -965,13 +1231,14 @@ export default function StreamPage() {
                     WebkitBackdropFilter: "blur(20px)",
                     border: `1px solid ${isUser ? "rgba(255,255,255,0.15)" : "rgba(120,255,200,0.2)"}`,
                     color: "rgba(255,255,255,0.95)",
-                    fontSize: 15,
-                    lineHeight: 1.55,
+                    fontSize: 17,
+                    fontWeight: 600,
+                    lineHeight: 1.6,
                     maxWidth: "95%",
-                    textShadow: "0 1px 2px rgba(0,0,0,0.5)",
+                    textShadow: "0 1px 3px rgba(0,0,0,0.6)",
                   }}
                 >
-                  {isUser ? (msg as UserMsg).text : am.text}
+                  {isUser ? (msg as UserMsg).text : <Streamdown mode="static">{am.text}</Streamdown>}
                   {!isUser && am.location && am.confidence != null && am.coords && (
                     <LocationTag location={am.location} confidence={am.confidence} coords={am.coords} />
                   )}
@@ -984,12 +1251,12 @@ export default function StreamPage() {
                   {/* Citations from Sonar */}
                   {!isUser && am.citations && am.citations.length > 0 && (
                     <div style={{ marginTop: 8, paddingTop: 6, borderTop: "1px solid rgba(120,255,200,0.15)" }}>
-                      <div style={{ fontSize: 10, fontWeight: 700, color: "rgba(120,255,200,0.6)", letterSpacing: "0.08em", marginBottom: 3 }}>SOURCES</div>
-                      {am.citations.map((c, ci) => (
-                        <div key={ci} style={{ fontSize: 12, color: "rgba(120,255,200,0.8)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                          {c.title || (() => { try { return new URL(c.url).hostname; } catch { return c.url; } })()}
-                        </div>
-                      ))}
+                      <div style={{ fontSize: 10, fontWeight: 700, color: "rgba(120,255,200,0.6)", letterSpacing: "0.08em", marginBottom: 4 }}>SOURCES</div>
+                      <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                        {am.citations.map((c, ci) => (
+                          <CitationCard key={ci} citation={c} variant="dark" />
+                        ))}
+                      </div>
                     </div>
                   )}
                 </div>
@@ -1090,30 +1357,33 @@ export default function StreamPage() {
                   </svg>
                 </button>
               </div>
-              <button
-                onClick={handleMic}
-                style={{
-                  width: 48,
-                  height: 48,
-                  borderRadius: "50%",
-                  border: `1.5px solid ${listening ? "rgba(120,255,200,0.6)" : "rgba(255,255,255,0.12)"}`,
-                  background: listening ? "rgba(120,255,200,0.15)" : "rgba(0,0,0,0.55)",
-                  backdropFilter: "blur(12px)",
-                  cursor: "pointer",
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  transition: "all 0.3s ease",
-                  flexShrink: 0,
-                  animation: listening ? "hud-listening 1.5s ease-in-out infinite" : "none",
-                }}
-              >
-                <svg width="18" height="18" fill="none" viewBox="0 0 24 24">
-                  <rect x="9" y="2" width="6" height="12" rx="3" fill={listening ? "rgba(120,255,200,0.9)" : "rgba(255,255,255,0.5)"} />
-                  <path d="M5 10a7 7 0 0014 0" stroke={listening ? "rgba(120,255,200,0.9)" : "rgba(255,255,255,0.5)"} strokeWidth="2" strokeLinecap="round" />
-                  <path d="M12 19v3M8 22h8" stroke={listening ? "rgba(120,255,200,0.9)" : "rgba(255,255,255,0.5)"} strokeWidth="2" strokeLinecap="round" />
-                </svg>
-              </button>
+              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                <AudioWaveform active={listening} />
+                <button
+                  onClick={handleMic}
+                  style={{
+                    width: 48,
+                    height: 48,
+                    borderRadius: "50%",
+                    border: `1.5px solid ${listening ? "rgba(120,255,200,0.6)" : "rgba(255,255,255,0.12)"}`,
+                    background: listening ? "rgba(120,255,200,0.15)" : "rgba(0,0,0,0.55)",
+                    backdropFilter: "blur(12px)",
+                    cursor: "pointer",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    transition: "all 0.3s ease",
+                    flexShrink: 0,
+                    animation: listening ? "hud-listening 1.5s ease-in-out infinite" : "none",
+                  }}
+                >
+                  <svg width="18" height="18" fill="none" viewBox="0 0 24 24">
+                    <rect x="9" y="2" width="6" height="12" rx="3" fill={listening ? "rgba(120,255,200,0.9)" : "rgba(255,255,255,0.5)"} />
+                    <path d="M5 10a7 7 0 0014 0" stroke={listening ? "rgba(120,255,200,0.9)" : "rgba(255,255,255,0.5)"} strokeWidth="2" strokeLinecap="round" />
+                    <path d="M12 19v3M8 22h8" stroke={listening ? "rgba(120,255,200,0.9)" : "rgba(255,255,255,0.5)"} strokeWidth="2" strokeLinecap="round" />
+                  </svg>
+                </button>
+              </div>
             </div>
           </>
         )}
