@@ -221,7 +221,10 @@ data: {"type":"result","ok":true,"reply":"I'm looking for your pill organizer no
 |------|--------|-------------|
 | `step` | `index`, `label`, `status`, `detail?`, `searches?` | New processing step started |
 | `step_done` | `index` | Step at index completed |
-| `result` | `ok`, `reply`, `action`, `request_id?`, `object_name?`, `event_id` | Final response |
+| `text` | `chunk` | Streaming text chunk of the final reply (arrives before `result`) |
+| `result` | `ok`, `reply`, `action`, `request_id?`, `object_name?`, `citations?`, `event_id` | Final response |
+
+**Note:** When `find_object` is triggered, additional steps appear from the 3D scene explorer (e.g., "Scanning the scene...", "Asking AI to find 'pills'...", "Triangulating 3D position...", "Found it! Flying to object..."). These are real-time status updates from the explorer and will appear between the "Searching for ..." step and the "Composing response" step.
 
 ### `action` values in result
 
@@ -338,36 +341,31 @@ The dashboard at `{MIRA_BASE_URL}/dashboard` subscribes to Supabase Realtime on 
 
 ## Step 5: Object Finding Flow (end-to-end)
 
-When the LLM decides to search for an object, this happens automatically:
+When the LLM decides to search for an object, the chat API handles everything inline:
 
 1. Chat API calls `find_object` tool → creates `object_requests` row (status: PENDING)
-2. Chat API emits `FIND_OBJECT_REQUESTED` event with `request_id`
-3. SSE result includes `action: "FIND_OBJECT"` + `request_id` + `object_name`
+2. Chat API emits `FIND_OBJECT_REQUESTED` event
+3. Chat API connects to the **Explorer 3D viewer** via WebSocket (`ws://localhost:8080/ws/chat`)
+4. Sends `{"message": "find the pill organizer"}` to the explorer
+5. Explorer scans the 3D point cloud scene, sends status updates back:
+   - `{"role": "status", "content": "Scanning the scene..."}`
+   - `{"role": "status", "content": "Asking AI to find 'pill organizer'..."}`
+   - `{"role": "status", "content": "Triangulating 3D position..."}`
+   - `{"role": "status", "content": "Found it! Flying to object..."}`
+6. These statuses stream to the device/stream UI as SSE step events in real time
+7. Explorer returns final result: `{"role": "assistant", "content": "Found: pill organizer on the dresser (seen in 3 views)"}`
+8. Chat API updates `object_requests` → FOUND or NOT_FOUND
+9. LLM composes a natural response using the explorer's result
+10. On the second monitor, the Explorer 3D viewer flies the camera to the object and shows a pulsing marker
 
-**Your CV pipeline should:**
+**The explorer must be running** at `ws://localhost:8080/ws/chat` (configurable via `EXPLORER_WS_URL` env var). If it's not running, the chat API gracefully falls back with a "could not connect" message and the LLM still responds.
 
-Subscribe to new `object_requests` rows via Supabase Realtime, or poll for PENDING requests, then report results:
-
+```bash
+# Start the explorer (from repo root):
+cd explorer && python viewer.py /path/to/scene.glb --port 8080 --viser-port 8081
 ```
-POST {MIRA_BASE_URL}/api/objects/update
-Content-Type: application/json
 
-{
-  "request_id": "uuid-from-step-3",
-  "patient_id": "a1b2c3d4-0001-4000-8000-000000000001",
-  "object_name": "pill organizer",
-  "found": true,
-  "location": "Garden table, near water glass",
-  "confidence": 0.94,
-  "source": "foundationpose_cam02"
-}
-```
-
-This will:
-- Update `object_requests` → FOUND, set `resolved_location` + `confidence`
-- Upsert `object_state` with latest known location
-- Emit `OBJECT_LOCATED` event (or `OBJECT_NOT_FOUND` if `found: false`)
-- Dashboard + device chat pick this up via Supabase Realtime automatically
+**Legacy `/api/objects/update` endpoint** still exists if you need to report object locations from an external CV pipeline, but the primary flow now uses the direct explorer integration above.
 
 ---
 
