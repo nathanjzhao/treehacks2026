@@ -6,6 +6,7 @@ import ChatBubble, { ChatMessage } from "./components/ChatBubble";
 import ChatInput from "./components/ChatInput";
 import MicButton from "./components/MicButton";
 import StatusIndicator from "./components/StatusIndicator";
+import { StepInfo } from "./components/ThinkingStepper";
 
 const DEMO_PATIENT_ID = "a1b2c3d4-0001-4000-8000-000000000001";
 
@@ -26,7 +27,6 @@ async function speak(text: string) {
     audio.onended = () => URL.revokeObjectURL(url);
     await audio.play();
   } catch {
-    // Fallback to browser TTS
     if ("speechSynthesis" in window) {
       window.speechSynthesis.cancel();
       const utterance = new SpeechSynthesisUtterance(text);
@@ -54,7 +54,7 @@ export default function DevicePage() {
   const scrollRef = useRef<HTMLDivElement>(null);
   const pendingRequestIds = useRef<Set<string>>(new Set());
 
-  // Auto-scroll to bottom
+  // Auto-scroll
   useEffect(() => {
     if (scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
@@ -121,14 +121,12 @@ export default function DevicePage() {
             setSearchingFor(null);
 
             const objectName = event.payload?.object_name || "item";
-            const msg = `Sorry, we couldn\u2019t locate your ${objectName} right now. Would you like me to alert a caregiver?`;
-
             setMessages((prev) => [
               ...prev,
               {
                 id: `sys-${Date.now()}`,
                 role: "system",
-                content: msg,
+                content: `Sorry, we couldn\u2019t locate your ${objectName} right now. Would you like me to alert a caregiver?`,
                 timestamp: new Date(),
               },
             ]);
@@ -147,8 +145,10 @@ export default function DevicePage() {
     };
   }, [patientId]);
 
+  // ── SSE-based chat send ──────────────────────────────────────
   const handleSend = useCallback(
     async (text: string) => {
+      // Add user message
       const userMsg: ChatMessage = {
         id: `user-${Date.now()}`,
         role: "user",
@@ -158,17 +158,22 @@ export default function DevicePage() {
       setMessages((prev) => [...prev, userMsg]);
       setIsSending(true);
 
-      const loadingId = `loading-${Date.now()}`;
+      // Add a "thinking" assistant message (will be updated with steps)
+      const thinkingId = `thinking-${Date.now()}`;
       setMessages((prev) => [
         ...prev,
         {
-          id: loadingId,
+          id: thinkingId,
           role: "assistant",
           content: "",
           timestamp: new Date(),
-          isLoading: true,
+          steps: [],
+          stepsFinished: false,
         },
       ]);
+
+      // Track steps locally
+      const stepsRef: StepInfo[] = [];
 
       try {
         const res = await fetch("/api/chat", {
@@ -177,45 +182,125 @@ export default function DevicePage() {
           body: JSON.stringify({ patient_id: patientId, message: text }),
         });
 
-        const data = await res.json();
-
-        setMessages((prev) => {
-          const without = prev.filter((m) => m.id !== loadingId);
-          return [
-            ...without,
-            {
-              id: `assistant-${Date.now()}`,
-              role: "assistant" as const,
-              content: data.reply || "Sorry, something went wrong.",
-              timestamp: new Date(),
-              action: data.action,
-            },
-          ];
-        });
-
-        if (data.action === "FIND_OBJECT" && data.request_id) {
-          pendingRequestIds.current.add(data.request_id);
-          setSearchingFor(data.object_name || "item");
+        if (!res.ok || !res.body) {
+          throw new Error("Chat request failed");
         }
 
-        if (data.reply) {
-          speak(data.reply);
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          buffer += decoder.decode(value, { stream: true });
+
+          // Parse SSE events from buffer
+          const lines = buffer.split("\n");
+          buffer = lines.pop() || ""; // keep incomplete line
+
+          for (const line of lines) {
+            if (!line.startsWith("data: ")) continue;
+            const jsonStr = line.slice(6);
+            if (!jsonStr) continue;
+
+            try {
+              const event = JSON.parse(jsonStr);
+
+              if (event.type === "step") {
+                // New step - add to list
+                stepsRef.push({
+                  label: event.label,
+                  detail: event.detail,
+                  searches: event.searches,
+                  status: "active",
+                });
+
+                // Mark all previous steps as done
+                for (let i = 0; i < stepsRef.length - 1; i++) {
+                  stepsRef[i].status = "done";
+                }
+
+                setMessages((prev) =>
+                  prev.map((m) =>
+                    m.id === thinkingId
+                      ? { ...m, steps: [...stepsRef] }
+                      : m
+                  )
+                );
+              }
+
+              if (event.type === "step_done") {
+                // Mark specific step as done
+                if (stepsRef[event.index]) {
+                  stepsRef[event.index].status = "done";
+                  setMessages((prev) =>
+                    prev.map((m) =>
+                      m.id === thinkingId
+                        ? { ...m, steps: [...stepsRef] }
+                        : m
+                    )
+                  );
+                }
+              }
+
+              if (event.type === "result") {
+                // Mark all steps done, add reply
+                stepsRef.forEach((s) => (s.status = "done"));
+
+                setMessages((prev) =>
+                  prev.map((m) =>
+                    m.id === thinkingId
+                      ? {
+                          ...m,
+                          content:
+                            event.reply ||
+                            "Sorry, something went wrong.",
+                          steps: [...stepsRef],
+                          stepsFinished: true,
+                          action: event.action,
+                          timestamp: new Date(),
+                        }
+                      : m
+                  )
+                );
+
+                // Track object search
+                if (
+                  event.action === "FIND_OBJECT" &&
+                  event.request_id
+                ) {
+                  pendingRequestIds.current.add(event.request_id);
+                  setSearchingFor(event.object_name || "item");
+                }
+
+                // Speak the response
+                if (event.reply) {
+                  speak(event.reply);
+                }
+              }
+            } catch {
+              // skip malformed JSON
+            }
+          }
         }
       } catch (err) {
         console.error("Chat error:", err);
-        setMessages((prev) => {
-          const without = prev.filter((m) => m.id !== loadingId);
-          return [
-            ...without,
-            {
-              id: `error-${Date.now()}`,
-              role: "assistant" as const,
-              content:
-                "Sorry, I\u2019m having trouble connecting right now. Please try again.",
-              timestamp: new Date(),
-            },
-          ];
-        });
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === thinkingId
+              ? {
+                  ...m,
+                  content:
+                    "Sorry, I\u2019m having trouble connecting right now. Please try again.",
+                  steps: [],
+                  stepsFinished: true,
+                  timestamp: new Date(),
+                }
+              : m
+          )
+        );
       } finally {
         setIsSending(false);
       }
@@ -227,7 +312,6 @@ export default function DevicePage() {
     <div className="h-screen flex flex-col bg-[#f4f6f5]">
       {/* Header */}
       <header className="relative h-[72px] bg-gradient-to-r from-teal-700 via-teal-600 to-emerald-600 flex items-center justify-between px-6 shrink-0 shadow-lg overflow-hidden">
-        {/* Decorative circles */}
         <div className="absolute -top-8 -right-8 w-32 h-32 rounded-full bg-white/5" />
         <div className="absolute -bottom-12 -left-4 w-24 h-24 rounded-full bg-white/5" />
 

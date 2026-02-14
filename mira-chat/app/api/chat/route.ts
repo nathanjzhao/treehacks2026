@@ -1,11 +1,10 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest } from "next/server";
 import { getSupabaseServerClient } from "@/lib/supabase-server";
 import { appendEvent, getRecentEvents, logEscalation } from "@/lib/event-spine";
 import { sendSms } from "@/lib/twilio";
 
 // ────────────────────────────────────────────────────────────────
 // Tool definitions for function calling
-// The LLM decides when to use these based on conversation context
 // ────────────────────────────────────────────────────────────────
 
 const TOOLS = [
@@ -20,7 +19,8 @@ const TOOLS = [
         properties: {
           object_name: {
             type: "string",
-            description: "The name of the object to find (e.g. 'glasses', 'pills', 'remote', 'phone')",
+            description:
+              "The name of the object to find (e.g. 'glasses', 'pills', 'remote', 'phone')",
           },
         },
         required: ["object_name"],
@@ -61,7 +61,8 @@ const TOOLS = [
         properties: {
           medication_query: {
             type: "string",
-            description: "The medication name or what the resident is asking about",
+            description:
+              "The medication name or what the resident is asking about",
           },
         },
         required: ["medication_query"],
@@ -71,7 +72,7 @@ const TOOLS = [
 ];
 
 // ────────────────────────────────────────────────────────────────
-// PHI Firewall - minimize patient data for LLM context
+// PHI Firewall
 // ────────────────────────────────────────────────────────────────
 
 interface PatientCardShape {
@@ -115,7 +116,7 @@ function minimizeForLLM(card: PatientCardShape): string {
 }
 
 // ────────────────────────────────────────────────────────────────
-// System prompt - personality, guardrails, tool usage guidance
+// System prompt
 // ────────────────────────────────────────────────────────────────
 
 const SYSTEM_PROMPT = `You are Mira, a warm, friendly, and genuinely caring AI assistant for residents in an assisted living facility. You talk like a kind, knowledgeable friend - not a robot.
@@ -143,7 +144,7 @@ GUARDRAILS:
 When you use tools, still respond conversationally. Don't just say "I've escalated" - show you care.`;
 
 // ────────────────────────────────────────────────────────────────
-// Build conversation history from recent events
+// Conversation history builder
 // ────────────────────────────────────────────────────────────────
 
 interface ChatTurn {
@@ -152,27 +153,33 @@ interface ChatTurn {
 }
 
 function buildConversationHistory(
-  recentEvents: Array<{ type: string; receipt_text?: string; created_at: string }>
+  recentEvents: Array<{
+    type: string;
+    receipt_text?: string;
+    created_at: string;
+  }>
 ): ChatTurn[] {
-  // Filter to chat events only, sort oldest-first for conversation order
   const chatEvents = recentEvents
     .filter(
       (e) =>
-        e.type === "CHAT_USER_UTTERANCE" || e.type === "CHAT_ASSISTANT_RESPONSE"
+        e.type === "CHAT_USER_UTTERANCE" ||
+        e.type === "CHAT_ASSISTANT_RESPONSE"
     )
-    .reverse(); // oldest first
+    .reverse();
 
-  // Take last 20 turns (10 exchanges) for context window
   const trimmed = chatEvents.slice(-20);
 
   return trimmed.map((e) => ({
-    role: e.type === "CHAT_USER_UTTERANCE" ? ("user" as const) : ("assistant" as const),
+    role:
+      e.type === "CHAT_USER_UTTERANCE"
+        ? ("user" as const)
+        : ("assistant" as const),
     content: e.receipt_text || "",
   }));
 }
 
 // ────────────────────────────────────────────────────────────────
-// LLM call with function calling
+// LLM call
 // ────────────────────────────────────────────────────────────────
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -186,7 +193,7 @@ interface ToolCall {
 interface LLMResponse {
   reply: string;
   toolCalls: ToolCall[];
-  rawAssistantMessage: Record<string, any>; // preserve full message for follow-up
+  rawAssistantMessage: Record<string, any>;
 }
 
 async function callLLM(
@@ -213,7 +220,8 @@ async function callLLM(
     headers: {
       Authorization: `Bearer ${apiKey}`,
       "Content-Type": "application/json",
-      "HTTP-Referer": process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000",
+      "HTTP-Referer":
+        process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000",
       "X-Title": "Mira",
     },
     body: JSON.stringify(body),
@@ -258,7 +266,6 @@ async function executeTool(
     case "find_object": {
       const objectName = args.object_name;
 
-      // Create object_requests row
       const { data: reqRow, error: reqErr } = await supabase
         .from("object_requests")
         .insert({
@@ -272,7 +279,6 @@ async function executeTool(
 
       if (reqErr) throw reqErr;
 
-      // Emit FIND_OBJECT_REQUESTED event
       await appendEvent({
         patient_id,
         type: "FIND_OBJECT_REQUESTED",
@@ -310,7 +316,6 @@ async function executeTool(
         response_payload: { reason, urgency },
       });
 
-      // Fire-and-forget Twilio
       const displayName = patientCard.display_name || "A resident";
       sendSms(
         `Mira Alert [${urgency.toUpperCase()}]: ${displayName} - ${reason}`
@@ -369,7 +374,8 @@ function getDemoResponse(message: string, card: PatientCardShape): string {
   const lower = message.toLowerCase();
   if (lower.includes("med") || lower.includes("pill")) {
     const meds = card.meds || [];
-    if (meds.length === 0) return "I don't see any medications in your record right now.";
+    if (meds.length === 0)
+      return "I don't see any medications in your record right now.";
     return `You have ${meds.length} medications: ${meds.map((m) => `${m.name} ${m.strength || ""}`).join(", ")}. Would you like details on any of them?`;
   }
   if (lower.includes("allerg")) {
@@ -382,150 +388,257 @@ function getDemoResponse(message: string, card: PatientCardShape): string {
 }
 
 // ────────────────────────────────────────────────────────────────
-// Main handler
+// Tool name to human-readable step label
+// ────────────────────────────────────────────────────────────────
+
+function toolLabel(name: string, args: Record<string, any>): {
+  label: string;
+  searches?: string[];
+} {
+  switch (name) {
+    case "find_object":
+      return {
+        label: `Searching for ${args.object_name || "item"}`,
+        searches: [args.object_name || "item"],
+      };
+    case "escalate_to_caregiver":
+      return {
+        label: "Alerting caregiver",
+      };
+    case "lookup_medication":
+      return {
+        label: "Looking up medication",
+        searches: [args.medication_query || "medication"],
+      };
+    default:
+      return { label: name };
+  }
+}
+
+// ────────────────────────────────────────────────────────────────
+// SSE Streaming handler
 // ────────────────────────────────────────────────────────────────
 
 export async function POST(request: NextRequest) {
-  try {
-    const body = await request.json();
-    const { patient_id, message } = body;
+  const body = await request.json();
+  const { patient_id, message } = body;
 
-    if (!patient_id || typeof patient_id !== "string") {
-      return NextResponse.json({ ok: false, error: "patient_id is required" }, { status: 400 });
-    }
-    if (!message || typeof message !== "string") {
-      return NextResponse.json({ ok: false, error: "message is required" }, { status: 400 });
-    }
-
-    const supabase = getSupabaseServerClient();
-
-    // Log user utterance
-    const userEvent = await appendEvent({
-      patient_id,
-      type: "CHAT_USER_UTTERANCE",
-      severity: "GREEN",
-      receipt_text: message,
-      source: "device",
-    });
-
-    // Get patient card
-    const { data: cardData } = await supabase
-      .from("patient_cards")
-      .select("card_json")
-      .eq("patient_id", patient_id)
-      .order("created_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
-
-    const patientCard = (cardData?.card_json as PatientCardShape) || {};
-    const context = minimizeForLLM(patientCard);
-
-    // Get recent events for conversation history
-    const recentEvents = await getRecentEvents(patient_id, 30);
-    const conversationHistory = buildConversationHistory(
-      recentEvents as Array<{ type: string; receipt_text?: string; created_at: string }>
-    );
-
-    // Build messages array: system + patient context + conversation history + new message
-    const llmMessages: Array<Record<string, any>> = [
-      {
-        role: "system",
-        content: `${SYSTEM_PROMPT}\n\nResident's Health Record:\n${context}`,
-      },
-      // Past conversation turns for context
-      ...conversationHistory.map((turn) => ({
-        role: turn.role as "user" | "assistant",
-        content: turn.content,
-      })),
-      // Current message
-      { role: "user" as const, content: message },
-    ];
-
-    let reply: string;
-    let action: "FIND_OBJECT" | "ESCALATE" | "ANSWER" = "ANSWER";
-    let request_id: string | undefined;
-    let object_name: string | undefined;
-
-    try {
-      // First LLM call - may include tool calls
-      const firstResponse = await callLLM(llmMessages);
-
-      if (firstResponse.toolCalls.length > 0) {
-        // Execute all tool calls
-        const toolResults: ToolResult[] = [];
-        for (const tc of firstResponse.toolCalls) {
-          const result = await executeTool(tc, patient_id, patientCard);
-          toolResults.push(result);
-        }
-
-        // Set action from tool results (prioritize ESCALATE > FIND_OBJECT > ANSWER)
-        if (toolResults.some((r) => r.action === "ESCALATE")) {
-          action = "ESCALATE";
-        } else if (toolResults.some((r) => r.action === "FIND_OBJECT")) {
-          action = "FIND_OBJECT";
-          const findResult = toolResults.find((r) => r.action === "FIND_OBJECT");
-          request_id = findResult?.request_id;
-          object_name = findResult?.object_name;
-        }
-
-        // Second LLM call with tool results - let it formulate a natural response
-        // IMPORTANT: must include the full assistant message with tool_calls,
-        // followed by tool result messages. This is required by the OpenAI API spec.
-        const followUpMessages: Array<Record<string, any>> = [
-          ...llmMessages,
-          // The assistant message exactly as returned (includes tool_calls field)
-          firstResponse.rawAssistantMessage,
-          // Tool results - one per tool call
-          ...firstResponse.toolCalls.map((tc, i) => ({
-            role: "tool",
-            content: toolResults[i].toolOutput,
-            tool_call_id: tc.id,
-          })),
-        ];
-
-        const secondResponse = await callLLM(followUpMessages, false);
-        reply = secondResponse.reply || firstResponse.reply || "I've taken care of that for you.";
-      } else {
-        // No tool calls - just a conversational response
-        reply = firstResponse.reply;
-      }
-
-      if (!reply) {
-        reply = getDemoResponse(message, patientCard);
-      }
-    } catch (err) {
-      console.error("LLM error:", err);
-      reply = getDemoResponse(message, patientCard);
-    }
-
-    // Log assistant response
-    const assistantEvent = await appendEvent({
-      patient_id,
-      type: "CHAT_ASSISTANT_RESPONSE",
-      severity: action === "ESCALATE" ? "RED" : "GREEN",
-      receipt_text: reply,
-      payload: {
-        action,
-        linked_user_event_id: userEvent.id,
-        ...(object_name ? { object_name } : {}),
-        ...(request_id ? { request_id } : {}),
-      },
-      source: "backend",
-    });
-
-    return NextResponse.json({
-      ok: true,
-      reply,
-      action,
-      ...(request_id ? { request_id } : {}),
-      ...(object_name ? { object_name } : {}),
-      event_id: assistantEvent.id,
-    });
-  } catch (error) {
-    console.error("Chat error:", error);
-    return NextResponse.json(
-      { ok: false, error: error instanceof Error ? error.message : "unknown_error" },
-      { status: 500 }
+  if (!patient_id || typeof patient_id !== "string") {
+    return new Response(
+      JSON.stringify({ ok: false, error: "patient_id is required" }),
+      { status: 400, headers: { "Content-Type": "application/json" } }
     );
   }
+  if (!message || typeof message !== "string") {
+    return new Response(
+      JSON.stringify({ ok: false, error: "message is required" }),
+      { status: 400, headers: { "Content-Type": "application/json" } }
+    );
+  }
+
+  const encoder = new TextEncoder();
+
+  const stream = new ReadableStream({
+    async start(controller) {
+      let stepIndex = 0;
+
+      const send = (data: Record<string, any>) => {
+        controller.enqueue(
+          encoder.encode(`data: ${JSON.stringify(data)}\n\n`)
+        );
+      };
+
+      const emitStep = (
+        label: string,
+        status: "active" | "done",
+        detail?: string,
+        searches?: string[]
+      ) => {
+        send({ type: "step", index: stepIndex, label, status, detail, searches });
+        if (status === "active") stepIndex++;
+      };
+
+      const markDone = (index: number) => {
+        // Mark a previously emitted step as done (re-emit with same index)
+        // Client handles this by updating the step at that index
+        send({ type: "step_done", index });
+      };
+
+      try {
+        const supabase = getSupabaseServerClient();
+
+        // Step: Interpreting
+        emitStep("Interpreting your message", "active");
+
+        // Log user utterance
+        const userEvent = await appendEvent({
+          patient_id,
+          type: "CHAT_USER_UTTERANCE",
+          severity: "GREEN",
+          receipt_text: message,
+          source: "device",
+        });
+
+        markDone(0);
+
+        // Step: Loading records
+        emitStep("Reviewing health records", "active");
+
+        const { data: cardData } = await supabase
+          .from("patient_cards")
+          .select("card_json")
+          .eq("patient_id", patient_id)
+          .order("created_at", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+
+        const patientCard = (cardData?.card_json as PatientCardShape) || {};
+        const context = minimizeForLLM(patientCard);
+
+        markDone(1);
+
+        // Step: Recalling conversation
+        emitStep("Recalling conversation", "active");
+
+        const recentEvents = await getRecentEvents(patient_id, 30);
+        const conversationHistory = buildConversationHistory(
+          recentEvents as Array<{
+            type: string;
+            receipt_text?: string;
+            created_at: string;
+          }>
+        );
+
+        markDone(2);
+
+        // Build LLM messages
+        const llmMessages: Array<Record<string, any>> = [
+          {
+            role: "system",
+            content: `${SYSTEM_PROMPT}\n\nResident's Health Record:\n${context}`,
+          },
+          ...conversationHistory.map((turn) => ({
+            role: turn.role,
+            content: turn.content,
+          })),
+          { role: "user", content: message },
+        ];
+
+        let reply: string;
+        let action: "FIND_OBJECT" | "ESCALATE" | "ANSWER" = "ANSWER";
+        let request_id: string | undefined;
+        let object_name: string | undefined;
+
+        try {
+          // Step: Thinking
+          emitStep("Thinking", "active", "Analyzing intent\u2026");
+
+          const firstResponse = await callLLM(llmMessages);
+          markDone(3);
+
+          if (firstResponse.toolCalls.length > 0) {
+            // Execute tools - emit a step for each
+            const toolResults: ToolResult[] = [];
+            for (const tc of firstResponse.toolCalls) {
+              const args = JSON.parse(tc.function.arguments);
+              const { label, searches } = toolLabel(tc.function.name, args);
+              const currentIdx = stepIndex;
+              emitStep(label, "active", undefined, searches);
+
+              const result = await executeTool(tc, patient_id, patientCard);
+              toolResults.push(result);
+              markDone(currentIdx);
+            }
+
+            // Set action from results
+            if (toolResults.some((r) => r.action === "ESCALATE")) {
+              action = "ESCALATE";
+            } else if (toolResults.some((r) => r.action === "FIND_OBJECT")) {
+              action = "FIND_OBJECT";
+              const findResult = toolResults.find(
+                (r) => r.action === "FIND_OBJECT"
+              );
+              request_id = findResult?.request_id;
+              object_name = findResult?.object_name;
+            }
+
+            // Step: Composing response
+            const composeIdx = stepIndex;
+            emitStep("Composing response", "active");
+
+            const followUpMessages: Array<Record<string, any>> = [
+              ...llmMessages,
+              firstResponse.rawAssistantMessage,
+              ...firstResponse.toolCalls.map((tc, i) => ({
+                role: "tool",
+                content: toolResults[i].toolOutput,
+                tool_call_id: tc.id,
+              })),
+            ];
+
+            const secondResponse = await callLLM(followUpMessages, false);
+            reply =
+              secondResponse.reply ||
+              firstResponse.reply ||
+              "I've taken care of that for you.";
+
+            markDone(composeIdx);
+          } else {
+            reply = firstResponse.reply;
+          }
+
+          if (!reply) {
+            reply = getDemoResponse(message, patientCard);
+          }
+        } catch (err) {
+          console.error("LLM error:", err);
+          reply = getDemoResponse(message, patientCard);
+        }
+
+        // Log assistant response
+        const assistantEvent = await appendEvent({
+          patient_id,
+          type: "CHAT_ASSISTANT_RESPONSE",
+          severity: action === "ESCALATE" ? "RED" : "GREEN",
+          receipt_text: reply,
+          payload: {
+            action,
+            linked_user_event_id: userEvent.id,
+            ...(object_name ? { object_name } : {}),
+            ...(request_id ? { request_id } : {}),
+          },
+          source: "backend",
+        });
+
+        // Send final result
+        send({
+          type: "result",
+          ok: true,
+          reply,
+          action,
+          ...(request_id ? { request_id } : {}),
+          ...(object_name ? { object_name } : {}),
+          event_id: assistantEvent.id,
+        });
+      } catch (error) {
+        console.error("Chat stream error:", error);
+        send({
+          type: "result",
+          ok: false,
+          reply: "Sorry, something went wrong. Please try again.",
+          action: "ANSWER",
+        });
+      } finally {
+        controller.close();
+      }
+    },
+  });
+
+  return new Response(stream, {
+    headers: {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache",
+      Connection: "keep-alive",
+    },
+  });
 }
