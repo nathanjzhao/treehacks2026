@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { getSupabaseServerClient } from "@/lib/supabase-server";
 import { appendEvent, getRecentEvents, logEscalation } from "@/lib/event-spine";
 import { sendSms } from "@/lib/twilio";
+import WebSocket from "ws";
 
 // ────────────────────────────────────────────────────────────────
 // Tool definitions for function calling
@@ -210,6 +211,97 @@ async function callSonar(
   );
 
   return { answer, citations };
+}
+
+// ────────────────────────────────────────────────────────────────
+// Explorer 3D Object Finder (teammate's viewer at /ws/chat)
+// ────────────────────────────────────────────────────────────────
+
+const EXPLORER_WS_URL =
+  process.env.EXPLORER_WS_URL || "ws://localhost:8080/ws/chat";
+
+interface ExplorerResult {
+  found: boolean;
+  description: string;
+}
+
+async function queryExplorer(
+  objectName: string,
+  onStatus?: (status: string) => void
+): Promise<ExplorerResult> {
+  return new Promise((resolve) => {
+    let resolved = false;
+
+    const timeout = setTimeout(() => {
+      if (!resolved) {
+        resolved = true;
+        try {
+          ws.close();
+        } catch {}
+        resolve({
+          found: false,
+          description: "3D scene search timed out",
+        });
+      }
+    }, 45000);
+
+    let ws: WebSocket;
+    try {
+      ws = new WebSocket(EXPLORER_WS_URL);
+    } catch {
+      clearTimeout(timeout);
+      resolve({
+        found: false,
+        description: "3D scene viewer not available",
+      });
+      return;
+    }
+
+    ws.on("open", () => {
+      ws.send(JSON.stringify({ message: `find the ${objectName}` }));
+    });
+
+    ws.on("message", (raw: Buffer | string) => {
+      try {
+        const data = JSON.parse(raw.toString());
+        if (data.role === "status") {
+          onStatus?.(data.content);
+        } else if (data.role === "assistant") {
+          clearTimeout(timeout);
+          resolved = true;
+          ws.close();
+          resolve({
+            found: !data.content.toLowerCase().includes("couldn't find"),
+            description: data.content,
+          });
+        }
+      } catch {
+        /* ignore malformed messages */
+      }
+    });
+
+    ws.on("error", () => {
+      if (!resolved) {
+        clearTimeout(timeout);
+        resolved = true;
+        resolve({
+          found: false,
+          description: "Could not connect to 3D scene viewer",
+        });
+      }
+    });
+
+    ws.on("close", () => {
+      if (!resolved) {
+        clearTimeout(timeout);
+        resolved = true;
+        resolve({
+          found: false,
+          description: "Connection to 3D scene viewer closed unexpectedly",
+        });
+      }
+    });
+  });
 }
 
 // ────────────────────────────────────────────────────────────────
@@ -423,7 +515,8 @@ interface ToolResult {
 async function executeTool(
   toolCall: ToolCall,
   patient_id: string,
-  patientCard: PatientCardShape
+  patientCard: PatientCardShape,
+  onStatus?: (status: string) => void
 ): Promise<ToolResult> {
   const args = JSON.parse(toolCall.function.arguments);
   const supabase = getSupabaseServerClient();
@@ -454,11 +547,24 @@ async function executeTool(
         source: "device",
       });
 
+      // Query the 3D scene explorer (teammate's viewer)
+      const explorerResult = await queryExplorer(objectName, onStatus);
+
+      // Update request status in DB
+      await supabase
+        .from("object_requests")
+        .update({
+          status: explorerResult.found ? "FOUND" : "NOT_FOUND",
+        })
+        .eq("id", reqRow.id);
+
       return {
         action: "FIND_OBJECT",
         request_id: reqRow.id,
         object_name: objectName,
-        toolOutput: `Object search initiated for "${objectName}". Request ID: ${reqRow.id}. The camera system is now looking for it. The resident will be notified when found.`,
+        toolOutput: explorerResult.found
+          ? `Object found in 3D scene: ${explorerResult.description}. The 3D viewer is now showing the location with a marker and the camera has flown to the object.`
+          : `Could not locate "${objectName}" in the 3D scene. ${explorerResult.description}`,
       };
     }
 
@@ -759,12 +865,20 @@ export async function POST(request: NextRequest) {
             for (const tc of firstResponse.toolCalls) {
               const args = JSON.parse(tc.function.arguments);
               const { label, searches } = toolLabel(tc.function.name, args);
-              const currentIdx = stepIndex;
               emitStep(label, "active", undefined, searches);
 
-              const result = await executeTool(tc, patient_id, patientCard);
+              // Pass onStatus callback so explorer can emit sub-steps
+              const result = await executeTool(
+                tc,
+                patient_id,
+                patientCard,
+                (status: string) => {
+                  markDone(stepIndex - 1); // mark previous step done
+                  emitStep(status, "active");
+                }
+              );
               toolResults.push(result);
-              markDone(currentIdx);
+              markDone(stepIndex - 1); // mark the last active step done
             }
 
             // Set action from results
