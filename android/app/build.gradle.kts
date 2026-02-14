@@ -77,5 +77,5 @@ dependencies {
   implementation("androidx.datastore:datastore-preferences:1.0.0")
 
   // Audio recording and wake word detection
-  implementation("ai.picovoice:porcupine-android:3.0.2")
+  implementation("ai.picovoice:porcupine-android:4.0.0")
 }

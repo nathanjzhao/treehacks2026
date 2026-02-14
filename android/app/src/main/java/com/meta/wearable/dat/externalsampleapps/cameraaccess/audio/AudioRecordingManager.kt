@@ -149,16 +149,40 @@ class AudioRecordingManager(
      */
     private fun initializePorcupine(accessKey: String): Porcupine? {
         return try {
-            // Note: In production, custom .ppn files should be in assets/
-            // For now, we'll use built-in keywords as fallback
-            Porcupine.Builder()
-                .setAccessKey(accessKey)
-                .setKeywords(arrayOf("hey google", "ok google")) // TODO: Replace with custom wake words
-                .setSensitivities(floatArrayOf(
-                    configuration.settings.wakeWordSensitivity,
-                    configuration.settings.wakeWordSensitivity
-                ))
-                .build(context)
+            val assetManager = context.assets
+            val wakeWordFiles = mutableListOf<String>()
+
+            // Check for custom wake word files in assets
+            try {
+                val assetFiles = assetManager.list("") ?: emptyArray()
+                if ("Hey-Mira_en_android_v4_0_0.ppn" in assetFiles) {
+                    wakeWordFiles.add("Hey-Mira_en_android_v4_0_0.ppn")
+                }
+                // Optional: check for additional wake word variants
+                if ("hey_mir_android.ppn" in assetFiles) {
+                    wakeWordFiles.add("hey_mir_android.ppn")
+                }
+            } catch (e: Exception) {
+                StreamingLogger.error(TAG, "Failed to list assets: ${e.message}")
+            }
+
+            val builder = Porcupine.Builder().setAccessKey(accessKey)
+
+            if (wakeWordFiles.isNotEmpty()) {
+                // Use custom wake word files
+                StreamingLogger.info(TAG, "Using custom wake words: ${wakeWordFiles.joinToString()}")
+                builder.setKeywordPaths(wakeWordFiles.toTypedArray())
+                    .setSensitivities(FloatArray(wakeWordFiles.size) {
+                        configuration.settings.wakeWordSensitivity
+                    })
+            } else {
+                // Fallback to built-in keyword for testing
+                StreamingLogger.info(TAG, "No custom wake words found, using built-in fallback")
+                builder.setKeywords(arrayOf(Porcupine.BuiltInKeyword.HEY_SIRI))
+                    .setSensitivities(floatArrayOf(configuration.settings.wakeWordSensitivity))
+            }
+
+            builder.build(context)
         } catch (e: Exception) {
             StreamingLogger.error(TAG, "Failed to initialize Porcupine: ${e.message}")
             null
@@ -199,7 +223,7 @@ class AudioRecordingManager(
         val frame = ShortArray(FRAME_SIZE)
         val startTime = System.currentTimeMillis()
 
-        while (isActive && isRunning) {
+        while (isRunning) {
             try {
                 // Read audio frame
                 val samplesRead = audioRecord?.read(frame, 0, FRAME_SIZE) ?: 0
