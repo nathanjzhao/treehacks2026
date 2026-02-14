@@ -259,3 +259,68 @@ async def query_object_location(
     # point cloud's world frame — no reliable way to map them.  Use box_2d
     # via OpenRouter (Gemini 3 Flash) which works well with raycasting.
     return await _query_box_2d(query, renders, labels)
+
+
+# ---------------------------------------------------------------------------
+# Up direction detection — ask Gemini which orientation looks right-side up
+# ---------------------------------------------------------------------------
+
+async def detect_up_direction(
+    renders: list[np.ndarray],
+    labels: list[str],
+) -> np.ndarray:
+    """Use Gemini to detect the scene's 'up' direction.
+
+    Sends 3 renders to Gemini (rendered with different up-vector candidates)
+    and asks which looks right-side up.
+
+    Args:
+        renders: list of 3 images, one per candidate up vector
+        labels: ["A (+Z up)", "B (+Y up)", "C (-Y up)"]
+
+    Returns:
+        The up vector as np.ndarray (e.g. [0,0,1] or [0,1,0])
+    """
+    client = genai.Client(api_key=GEMINI_API_KEY)
+
+    content_parts = []
+    for i, (render, label) in enumerate(zip(renders, labels)):
+        content_parts.append(f"Option {label}:")
+        jpeg_bytes = _numpy_to_jpeg_bytes(render)
+        content_parts.append(
+            types.Part.from_bytes(data=jpeg_bytes, mime_type="image/jpeg")
+        )
+
+    content_parts.append(
+        "These are 3 renders of the same indoor 3D scene from the same camera position, "
+        "but with different 'up' orientations. Which option shows the scene RIGHT-SIDE UP "
+        "(gravity pointing down, floor at bottom, ceiling at top)?\n"
+        "Reply with ONLY the letter: A, B, or C."
+    )
+
+    config = types.GenerateContentConfig(temperature=0.0)
+
+    try:
+        response = await asyncio.to_thread(
+            client.models.generate_content,
+            model=GEMINI_MODEL,
+            contents=content_parts,
+            config=config,
+        )
+        answer = response.text.strip().upper()
+        print(f"[Gemini-Up] Response: {answer}", flush=True)
+
+        UP_MAP = {"A": np.array([0.0, 0.0, 1.0]),
+                  "B": np.array([0.0, 1.0, 0.0]),
+                  "C": np.array([0.0, -1.0, 0.0])}
+
+        for key in UP_MAP:
+            if key in answer:
+                print(f"[Gemini-Up] Detected up direction: {key} = {UP_MAP[key]}", flush=True)
+                return UP_MAP[key]
+
+        print(f"[Gemini-Up] Could not parse '{answer}', defaulting to +Z", flush=True)
+        return np.array([0.0, 0.0, 1.0])
+    except Exception as e:
+        print(f"[Gemini-Up] Failed: {e}, defaulting to +Z", flush=True)
+        return np.array([0.0, 0.0, 1.0])
