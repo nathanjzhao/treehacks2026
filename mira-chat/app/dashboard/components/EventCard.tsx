@@ -13,6 +13,7 @@ const TYPE_META: Record<string, { label: string; icon: string; color: string }> 
   OBJECT_LOCATED: { label: "Object Found", icon: "\u{1F4CD}", color: "bg-emerald-100 text-emerald-700" },
   OBJECT_NOT_FOUND: { label: "Not Found", icon: "\u{274C}", color: "bg-amber-100 text-amber-700" },
   ESCALATED: { label: "Escalation", icon: "\u{1F6A8}", color: "bg-red-100 text-red-700" },
+  WEB_SEARCH_COMPLETED: { label: "Web Search", icon: "\u{1F310}", color: "bg-indigo-100 text-indigo-700" },
 };
 
 const SEVERITY_COLORS: Record<string, string> = {
