@@ -64,6 +64,34 @@ python groundedsam2/depth_viewer.py data/groundedsam2/ --source-dir data/
 
 Keyboard: `Space` play/pause, `←→` step, `[]` ±5 frames, `Home`/`End` first/last.
 
+## 3D Object Localization
+
+Combines all three systems (Grounded SAM 2 + Depth Anything V2 + HLoc) to predict where objects are in 3D world coordinates. Uses camera pose estimation + object depth to backproject 2D detections into 3D space.
+
+Requires a pre-built HLoc reference (see `hloc_localization/`).
+
+```bash
+modal run groundedsam2/locate_app.py \
+  --video-path data/IMG_4730.MOV \
+  --text-prompt "painting. chair. lamp. door." \
+  --reference-path hloc_localization/data/hloc_reference/IMG_4720/reference.tar.gz \
+  --localize-fps 2
+```
+
+Outputs `{stem}_objects3d.json` to `data/groundedsam2/` with per-object 3D positions, camera poses, and metadata.
+
+### 3D Viewer
+
+Viser-based viewer showing GLB point cloud + detected objects as labeled spheres + camera trajectory:
+
+```bash
+python groundedsam2/locate_viewer.py \
+  data/mapanything/IMG_4720.glb \
+  data/groundedsam2/IMG_4730_objects3d.json \
+  --reference hloc_localization/data/hloc_reference/IMG_4720/reference.tar.gz
+# Open http://localhost:8890
+```
+
 ## Pipeline
 
 1. Extract all video frames as JPEGs on Modal A100
