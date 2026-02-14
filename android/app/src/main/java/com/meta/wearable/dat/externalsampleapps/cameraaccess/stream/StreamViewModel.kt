@@ -73,6 +73,15 @@ class StreamViewModel(
   private var videoJob: Job? = null
   private var stateJob: Job? = null
 
+  // Multi-destination streaming components
+  private val videoStreamingManager = com.meta.wearable.dat.externalsampleapps.cameraaccess.streaming.VideoStreamingManager(
+      context = application,
+      coroutineScope = viewModelScope
+  )
+  private val streamingPreferences = com.meta.wearable.dat.externalsampleapps.cameraaccess.streaming.StreamingPreferencesDataStore(application)
+  private var configJob: Job? = null
+  private var statsJob: Job? = null
+
   fun startStream() {
     videoJob?.cancel()
     stateJob?.cancel()
@@ -97,6 +106,53 @@ class StreamViewModel(
             }
           }
         }
+
+    // Initialize streaming configuration and statistics
+    startStreamingMonitoring()
+  }
+
+  private fun startStreamingMonitoring() {
+    // Load and monitor configuration
+    configJob?.cancel()
+    configJob = viewModelScope.launch {
+      streamingPreferences.streamingConfiguration.collect { config ->
+        _uiState.update { it.copy(streamingConfiguration = config) }
+
+        // Auto-enable/disable streaming based on configuration
+        if (config.computer.enabled) {
+          videoStreamingManager.enableComputerStreaming(
+              endpoint = config.computer.ip,
+              port = config.computer.port,
+              targetFps = config.settings.computerTargetFps,
+              jpegQuality = config.settings.jpegQuality
+          )
+        } else {
+          videoStreamingManager.disableComputerStreaming()
+        }
+
+        if (config.cloud.enabled && config.cloud.userId.isNotEmpty()) {
+          videoStreamingManager.enableCloudStreaming(
+              userId = config.cloud.userId,
+              baseUrl = config.cloud.baseUrl
+          )
+        } else {
+          videoStreamingManager.disableCloudStreaming()
+        }
+
+        // Update UI enabled state
+        _uiState.update {
+          it.copy(multiDestinationStreamingEnabled = config.computer.enabled || config.cloud.enabled)
+        }
+      }
+    }
+
+    // Monitor streaming statistics
+    statsJob?.cancel()
+    statsJob = viewModelScope.launch {
+      videoStreamingManager.statistics.collect { stats ->
+        _uiState.update { it.copy(streamingStats = stats) }
+      }
+    }
   }
 
   fun stopStream() {
@@ -196,6 +252,18 @@ class StreamViewModel(
 
     val bitmap = BitmapFactory.decodeByteArray(out, 0, out.size)
     _uiState.update { it.copy(videoFrame = bitmap) }
+
+    // Multi-destination streaming: distribute frame to enabled destinations
+    if (_uiState.value.multiDestinationStreamingEnabled) {
+      viewModelScope.launch {
+        videoStreamingManager.distributeFrame(
+            frameData = byteArray,
+            width = videoFrame.width,
+            height = videoFrame.height,
+            timestamp = videoFrame.presentationTimestamp
+        )
+      }
+    }
   }
 
   // Convert I420 (YYYYYYYY:UUVV) to NV21 (YYYYYYYY:VUVU)
@@ -307,10 +375,50 @@ class StreamViewModel(
     }
   }
 
+  // Multi-destination streaming control methods
+
+  suspend fun enableComputerStreaming(ip: String, port: Int) {
+    streamingPreferences.updateComputerEndpoint(
+        _uiState.value.streamingConfiguration.computer.copy(
+            ip = ip,
+            port = port,
+            enabled = true
+        )
+    )
+  }
+
+  suspend fun disableComputerStreaming() {
+    streamingPreferences.updateComputerEndpoint(
+        _uiState.value.streamingConfiguration.computer.copy(enabled = false)
+    )
+  }
+
+  suspend fun enableCloudStreaming(userId: String) {
+    streamingPreferences.updateCloudEndpoint(
+        _uiState.value.streamingConfiguration.cloud.copy(
+            userId = userId,
+            enabled = true
+        )
+    )
+  }
+
+  suspend fun disableCloudStreaming() {
+    streamingPreferences.updateCloudEndpoint(
+        _uiState.value.streamingConfiguration.cloud.copy(enabled = false)
+    )
+  }
+
+  fun getStreamingStats(): StateFlow<com.meta.wearable.dat.externalsampleapps.cameraaccess.streaming.StreamingStats> {
+    return videoStreamingManager.statistics
+  }
+
   override fun onCleared() {
     super.onCleared()
     stopStream()
     stateJob?.cancel()
+    configJob?.cancel()
+    statsJob?.cancel()
+    videoStreamingManager.cleanup()
   }
 
   class Factory(

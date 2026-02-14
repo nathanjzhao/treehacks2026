@@ -10,6 +10,7 @@ plugins {
   alias(libs.plugins.android.application)
   alias(libs.plugins.jetbrains.kotlin.android)
   alias(libs.plugins.compose.compiler)
+  kotlin("plugin.serialization") version "2.1.20"
 }
 
 android {
@@ -69,4 +70,9 @@ dependencies {
   androidTestImplementation(libs.androidx.ui.test.junit4)
   androidTestImplementation(libs.androidx.test.uiautomator)
   androidTestImplementation(libs.androidx.test.rules)
+
+  // Multi-destination streaming dependencies
+  implementation("com.squareup.okhttp3:okhttp:4.12.0")
+  implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.6.2")
+  implementation("androidx.datastore:datastore-preferences:1.0.0")
 }
