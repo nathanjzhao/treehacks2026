@@ -13,6 +13,8 @@ export interface ChatMessage {
   // Stepper fields
   steps?: StepInfo[];
   stepsFinished?: boolean;
+  // Sonar citations
+  citations?: Array<{ title?: string; url: string }>;
 }
 
 interface ChatBubbleProps {
@@ -20,7 +22,7 @@ interface ChatBubbleProps {
 }
 
 export default function ChatBubble({ message }: ChatBubbleProps) {
-  const { role, content, isLoading, action, steps, stepsFinished } = message;
+  const { role, content, isLoading, action, steps, stepsFinished, citations } = message;
   const [stepperExpanded, setStepperExpanded] = useState(true);
 
   if (isLoading) {
@@ -118,6 +120,24 @@ export default function ChatBubble({ message }: ChatBubbleProps) {
               <p className="text-[15px] leading-relaxed text-slate-700">
                 {content}
               </p>
+              {citations && citations.length > 0 && (
+                <div className="mt-3 pt-2 border-t border-slate-100 space-y-1">
+                  <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+                    Sources
+                  </div>
+                  {citations.map((c, i) => (
+                    <a
+                      key={i}
+                      href={c.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="block text-[12px] text-teal-600 hover:text-teal-700 hover:underline truncate"
+                    >
+                      {c.title || (() => { try { return new URL(c.url).hostname; } catch { return c.url; } })()}
+                    </a>
+                  ))}
+                </div>
+              )}
             </div>
           )}
 

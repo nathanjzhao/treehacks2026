@@ -3,6 +3,7 @@
 import { useState, useRef, useEffect } from "react";
 import { MiraEvent } from "@/lib/supabase/client";
 import EventCard from "./EventCard";
+import ChatFeed from "./ChatFeed";
 
 interface EventTimelineProps {
   events: MiraEvent[];
@@ -76,7 +77,9 @@ export default function EventTimeline({ events }: EventTimelineProps) {
 
       {/* Events */}
       <div ref={scrollRef} className="flex-1 overflow-y-auto px-5 pb-5 space-y-3">
-        {filtered.length === 0 ? (
+        {filter === "chat" ? (
+          <ChatFeed events={filtered} />
+        ) : filtered.length === 0 ? (
           <div className="text-center py-12 text-muted text-sm">
             No events to display
           </div>

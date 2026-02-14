@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useRef, useCallback } from "react";
 import { supabase } from "@/lib/supabase/client";
+import { consumeChatSSE } from "@/lib/sse-parser";
 import ChatBubble, { ChatMessage } from "./components/ChatBubble";
 import ChatInput from "./components/ChatInput";
 import MicButton from "./components/MicButton";
@@ -176,131 +177,83 @@ export default function DevicePage() {
       const stepsRef: StepInfo[] = [];
 
       try {
-        const res = await fetch("/api/chat", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ patient_id: patientId, message: text }),
-        });
-
-        if (!res.ok || !res.body) {
-          throw new Error("Chat request failed");
-        }
-
-        const reader = res.body.getReader();
-        const decoder = new TextDecoder();
-        let buffer = "";
-
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-
-          buffer += decoder.decode(value, { stream: true });
-
-          // Parse SSE events from buffer
-          const lines = buffer.split("\n");
-          buffer = lines.pop() || ""; // keep incomplete line
-
-          for (const line of lines) {
-            if (!line.startsWith("data: ")) continue;
-            const jsonStr = line.slice(6);
-            if (!jsonStr) continue;
-
-            try {
-              const event = JSON.parse(jsonStr);
-
-              if (event.type === "step") {
-                // New step - add to list
-                stepsRef.push({
-                  label: event.label,
-                  detail: event.detail,
-                  searches: event.searches,
-                  status: "active",
-                });
-
-                // Mark all previous steps as done
-                for (let i = 0; i < stepsRef.length - 1; i++) {
-                  stepsRef[i].status = "done";
-                }
-
-                setMessages((prev) =>
-                  prev.map((m) =>
-                    m.id === thinkingId
-                      ? { ...m, steps: [...stepsRef] }
-                      : m
-                  )
-                );
-              }
-
-              if (event.type === "step_done") {
-                // Mark specific step as done
-                if (stepsRef[event.index]) {
-                  stepsRef[event.index].status = "done";
-                  setMessages((prev) =>
-                    prev.map((m) =>
-                      m.id === thinkingId
-                        ? { ...m, steps: [...stepsRef] }
-                        : m
-                    )
-                  );
-                }
-              }
-
-              if (event.type === "result") {
-                // Mark all steps done, add reply
-                stepsRef.forEach((s) => (s.status = "done"));
-
-                setMessages((prev) =>
-                  prev.map((m) =>
-                    m.id === thinkingId
-                      ? {
-                          ...m,
-                          content:
-                            event.reply ||
-                            "Sorry, something went wrong.",
-                          steps: [...stepsRef],
-                          stepsFinished: true,
-                          action: event.action,
-                          timestamp: new Date(),
-                        }
-                      : m
-                  )
-                );
-
-                // Track object search
-                if (
-                  event.action === "FIND_OBJECT" &&
-                  event.request_id
-                ) {
-                  pendingRequestIds.current.add(event.request_id);
-                  setSearchingFor(event.object_name || "item");
-                }
-
-                // Speak the response
-                if (event.reply) {
-                  speak(event.reply);
-                }
-              }
-            } catch {
-              // skip malformed JSON
+        await consumeChatSSE(patientId, text, {
+          onStep: (event) => {
+            stepsRef.push({
+              label: event.label,
+              detail: event.detail,
+              searches: event.searches,
+              status: "active",
+            });
+            for (let i = 0; i < stepsRef.length - 1; i++) {
+              stepsRef[i].status = "done";
             }
-          }
-        }
-      } catch (err) {
-        console.error("Chat error:", err);
-        setMessages((prev) =>
-          prev.map((m) =>
-            m.id === thinkingId
-              ? {
-                  ...m,
-                  content:
-                    "Sorry, I\u2019m having trouble connecting right now. Please try again.",
-                  steps: [],
-                  stepsFinished: true,
-                  timestamp: new Date(),
-                }
-              : m
-          )
-        );
+            setMessages((prev) =>
+              prev.map((m) =>
+                m.id === thinkingId ? { ...m, steps: [...stepsRef] } : m
+              )
+            );
+          },
+          onStepDone: (event) => {
+            if (stepsRef[event.index]) {
+              stepsRef[event.index].status = "done";
+              setMessages((prev) =>
+                prev.map((m) =>
+                  m.id === thinkingId ? { ...m, steps: [...stepsRef] } : m
+                )
+              );
+            }
+          },
+          onText: (event) => {
+            setMessages((prev) =>
+              prev.map((m) =>
+                m.id === thinkingId
+                  ? { ...m, content: (m.content || "") + event.chunk }
+                  : m
+              )
+            );
+          },
+          onResult: (event) => {
+            stepsRef.forEach((s) => (s.status = "done"));
+            setMessages((prev) =>
+              prev.map((m) =>
+                m.id === thinkingId
+                  ? {
+                      ...m,
+                      content: event.reply || "Sorry, something went wrong.",
+                      steps: [...stepsRef],
+                      stepsFinished: true,
+                      action: event.action as ChatMessage["action"],
+                      citations: event.citations || undefined,
+                      timestamp: new Date(),
+                    }
+                  : m
+              )
+            );
+            if (event.action === "FIND_OBJECT" && event.request_id) {
+              pendingRequestIds.current.add(event.request_id);
+              setSearchingFor(event.object_name || "item");
+            }
+            if (event.reply) speak(event.reply);
+          },
+          onError: (err) => {
+            console.error("Chat error:", err);
+            setMessages((prev) =>
+              prev.map((m) =>
+                m.id === thinkingId
+                  ? {
+                      ...m,
+                      content:
+                        "Sorry, I\u2019m having trouble connecting right now. Please try again.",
+                      steps: [],
+                      stepsFinished: true,
+                      timestamp: new Date(),
+                    }
+                  : m
+              )
+            );
+          },
+        });
       } finally {
         setIsSending(false);
       }

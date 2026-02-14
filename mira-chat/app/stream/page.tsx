@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef, useCallback } from "react";
+import { consumeChatSSE } from "@/lib/sse-parser";
 
 /* ================================================================
    ACTION CHAINS — scripted demos for hackathon presentation
@@ -429,6 +430,19 @@ type Msg = UserMsg | ThinkingMsg | AssistantMsg;
    Main: AR Glasses Stream Overlay
    ================================================================ */
 
+const DEMO_PATIENT_ID = "a1b2c3d4-0001-4000-8000-000000000001";
+
+function mapStepToIcon(label: string): string {
+  const l = label.toLowerCase();
+  if (l.includes("interpret")) return "brain";
+  if (l.includes("health record") || l.includes("recalling") || l.includes("looking up") || l.includes("researching")) return "search";
+  if (l.includes("thinking") || l.includes("analyzing")) return "brain";
+  if (l.includes("searching for")) return "camera";
+  if (l.includes("alert") || l.includes("caregiver")) return "phone";
+  if (l.includes("composing") || l.includes("generating")) return "sparkle";
+  return "brain";
+}
+
 export default function StreamPage() {
   const [messages, setMessages] = useState<Msg[]>([]);
   const [processing, setProcessing] = useState<Processing | null>(null);
@@ -437,6 +451,7 @@ export default function StreamPage() {
   const [showEscalation, setShowEscalation] = useState(false);
   const [input, setInput] = useState("");
   const [clock, setClock] = useState<Date | null>(null);
+  const [liveMode, setLiveMode] = useState(false);
   const chatEndRef = useRef<HTMLDivElement>(null);
   const pidRef = useRef(0);
 
@@ -455,8 +470,7 @@ export default function StreamPage() {
     []
   );
 
-  const send = useCallback((text: string) => {
-    if (!text.trim()) return;
+  const sendDemo = useCallback((text: string) => {
     const chain = getChain(text);
     const mid = ++pidRef.current;
     setMessages((p) => [...p, { role: "user", text: text.trim(), time: new Date() }]);
@@ -501,6 +515,82 @@ export default function StreamPage() {
     advance();
   }, []);
 
+  const sendLive = useCallback((text: string) => {
+    const mid = ++pidRef.current;
+    setMessages((p) => [...p, { role: "user", text: text.trim(), time: new Date() }]);
+    setInput("");
+
+    const liveSteps: Step[] = [];
+    setProcessing({ id: mid, steps: liveSteps, currentStep: 0, chain: { steps: liveSteps, reply: "", type: "thinking" }, finished: false });
+    setExpandedSteppers((p) => ({ ...p, [mid]: true }));
+
+    let replyBuffer = "";
+
+    consumeChatSSE(DEMO_PATIENT_ID, text, {
+      onStep: (event) => {
+        liveSteps.push({
+          label: event.label,
+          detail: event.detail,
+          searches: event.searches,
+          icon: mapStepToIcon(event.label),
+          duration: 0,
+        });
+        setProcessing((p) =>
+          p && p.id === mid
+            ? { ...p, steps: [...liveSteps], currentStep: liveSteps.length, chain: { ...p.chain, steps: [...liveSteps] } }
+            : p
+        );
+      },
+      onStepDone: () => {
+        // Steps auto-advance via currentStep tracking
+      },
+      onText: (event) => {
+        replyBuffer += event.chunk;
+      },
+      onResult: (event) => {
+        setProcessing((p) => (p && p.id === mid ? { ...p, finished: true } : p));
+        setTimeout(() => {
+          const resultType = event.action === "ESCALATE" ? "escalation"
+            : event.action === "FIND_OBJECT" ? "object_found"
+            : "info";
+          setMessages((p) => [
+            ...p,
+            { role: "thinking", steps: liveSteps, id: mid, time: new Date() },
+            {
+              role: "assistant",
+              text: event.reply || replyBuffer,
+              type: resultType,
+              time: new Date(),
+            },
+          ]);
+          setExpandedSteppers((p) => ({ ...p, [mid]: false }));
+          setProcessing(null);
+          if (event.action === "ESCALATE") {
+            setShowEscalation(true);
+            setTimeout(() => setShowEscalation(false), 4000);
+          }
+        }, 400);
+      },
+      onError: (err) => {
+        console.error("Live chat error:", err);
+        setProcessing(null);
+        setMessages((p) => [
+          ...p,
+          { role: "assistant", text: "Connection error. Try demo mode.", type: "info", time: new Date() },
+        ]);
+      },
+    });
+  }, []);
+
+  const send = useCallback((text: string) => {
+    if (!text.trim()) return;
+    if (liveMode) {
+      sendLive(text);
+    } else {
+      sendDemo(text);
+    }
+  }, [liveMode, sendLive, sendDemo]);
+
   const handleMic = () => {
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SR) {
@@ -533,15 +623,16 @@ export default function StreamPage() {
     return `${d.getHours().toString().padStart(2, "0")}:${d.getMinutes().toString().padStart(2, "0")}:${d.getSeconds().toString().padStart(2, "0")}`;
   };
 
-  // Auto-demo on mount
+  // Auto-demo on mount (demo mode only)
   useEffect(() => {
-    const t1 = setTimeout(() => send("Good morning, Mira"), 2500);
-    const t2 = setTimeout(() => send("Where are my pills?"), 9000);
+    if (liveMode) return;
+    const t1 = setTimeout(() => sendDemo("Good morning, Mira"), 2500);
+    const t2 = setTimeout(() => sendDemo("Where are my pills?"), 9000);
     return () => {
       clearTimeout(t1);
       clearTimeout(t2);
     };
-  }, [send]);
+  }, [liveMode, sendDemo]);
 
   return (
     <div style={{ width: "100%", height: "100vh", position: "relative", overflow: "hidden", background: "#0a0a0a", fontFamily: "'DM Sans', 'Helvetica Neue', sans-serif" }}>
@@ -646,13 +737,32 @@ export default function StreamPage() {
         <span style={{ fontSize: 11, color: "rgba(255,255,255,0.4)", fontFamily: "'DM Mono', monospace" }}>3 meds \u00b7 2 allergies</span>
       </div>
 
-      {/* ──── BOTTOM LEFT: Sensor data ──── */}
+      {/* ──── BOTTOM LEFT: Sensor data + mode toggle ──── */}
       <div style={{ position: "absolute", bottom: 32, left: 56, zIndex: 10 }}>
         <div style={{ fontSize: 10, color: "rgba(255,255,255,0.25)", fontFamily: "'DM Mono', monospace", lineHeight: 1.8 }}>
-          <div>DEPTH: 3.2m \u00b7 OUTDOOR</div>
-          <div>IMU: stable \u00b7 GPS: 37.4275\u00b0N</div>
-          <div>BATT: 72% \u00b7 TEMP: 68\u00b0F</div>
+          <div>DEPTH: 3.2m · OUTDOOR</div>
+          <div>IMU: stable · GPS: 37.4275°N</div>
+          <div>BATT: 72% · TEMP: 68°F</div>
         </div>
+        <button
+          onClick={() => { setLiveMode((p) => !p); setMessages([]); setProcessing(null); }}
+          style={{
+            marginTop: 10,
+            padding: "4px 12px",
+            fontSize: 10,
+            fontFamily: "'DM Mono', monospace",
+            fontWeight: 600,
+            letterSpacing: "0.05em",
+            color: liveMode ? "rgba(120,255,200,0.9)" : "rgba(255,255,255,0.4)",
+            background: liveMode ? "rgba(120,255,200,0.1)" : "rgba(255,255,255,0.05)",
+            border: `1px solid ${liveMode ? "rgba(120,255,200,0.3)" : "rgba(255,255,255,0.1)"}`,
+            borderRadius: 6,
+            cursor: "pointer",
+            transition: "all 0.2s",
+          }}
+        >
+          {liveMode ? "● LIVE" : "○ DEMO"}
+        </button>
       </div>
 
       {/* ──── CHAT OVERLAY ──── */}
