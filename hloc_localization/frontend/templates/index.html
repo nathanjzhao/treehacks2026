@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Live Camera Localization</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { display: flex; height: 100vh; background: #1e1e1e; color: #e0e0e0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
+
+  #viewer { flex: 1; border: none; min-width: 0; }
+
+  #side-panel {
+    width: 340px; min-width: 280px; max-width: 420px;
+    display: flex; flex-direction: column;
+    border-left: 1px solid #333;
+    background: #252526;
+  }
+  #panel-header {
+    padding: 14px 16px; font-weight: 600; font-size: 15px;
+    border-bottom: 1px solid #333; background: #2d2d2d;
+  }
+  #status-area {
+    flex: 1; overflow-y: auto; padding: 16px;
+    display: flex; flex-direction: column; gap: 8px;
+    font-size: 13px;
+  }
+  .pose-row { display: flex; justify-content: space-between; padding: 4px 0; }
+  .pose-label { color: #888; }
+  .pose-value { font-family: 'SF Mono', monospace; color: #4fc3f7; }
+
+  #controls {
+    padding: 12px 16px; border-top: 1px solid #333; background: #2d2d2d;
+  }
+  #controls button {
+    width: 100%; padding: 10px; border-radius: 8px; border: none;
+    background: #0078d4; color: #fff; font-size: 14px; cursor: pointer;
+    font-weight: 500; margin-bottom: 8px;
+  }
+  #controls button:hover { background: #006bbd; }
+  #controls button:disabled { opacity: 0.5; cursor: default; }
+  #controls button.stop { background: #d42020; }
+  #controls button.stop:hover { background: #b01010; }
+
+  .stat { color: #aaa; font-size: 12px; padding: 2px 0; }
+  .connected { color: #4caf50; }
+  .disconnected { color: #f44336; }
+  #ref-select { width: 100%; padding: 8px; margin-bottom: 8px; background: #1e1e1e; color: #e0e0e0; border: 1px solid #444; border-radius: 6px; font-size: 13px; }
+</style>
+</head>
+<body>
+
+<iframe id="viewer" src="http://localhost:{{ viser_port }}"></iframe>
+
+<div id="side-panel">
+  <div id="panel-header">Live Localization</div>
+  <div id="status-area">
+    <div class="stat">Status: <span id="ws-status" class="disconnected">Disconnected</span></div>
+    <div class="stat">FPS: <span id="fps-display">—</span></div>
+    <div class="stat">Inliers: <span id="inliers-display">—</span></div>
+    <div class="stat">Latency: <span id="latency-display">—</span></div>
+    <hr style="border-color: #333; margin: 8px 0;">
+    <div class="pose-row"><span class="pose-label">tx</span><span class="pose-value" id="tx">—</span></div>
+    <div class="pose-row"><span class="pose-label">ty</span><span class="pose-value" id="ty">—</span></div>
+    <div class="pose-row"><span class="pose-label">tz</span><span class="pose-value" id="tz">—</span></div>
+    <div class="pose-row"><span class="pose-label">qw</span><span class="pose-value" id="qw">—</span></div>
+    <div class="pose-row"><span class="pose-label">qx</span><span class="pose-value" id="qx">—</span></div>
+    <div class="pose-row"><span class="pose-label">qy</span><span class="pose-value" id="qy">—</span></div>
+    <div class="pose-row"><span class="pose-label">qz</span><span class="pose-value" id="qz">—</span></div>
+    <hr style="border-color: #333; margin: 8px 0;">
+    <div id="pose-log" style="font-size: 11px; font-family: monospace; max-height: 200px; overflow-y: auto; color: #888;"></div>
+  </div>
+  <div id="controls">
+    <select id="ref-select"><option value="">Loading references...</option></select>
+    <button id="start-btn" onclick="startStream()">Start Streaming</button>
+    <button id="stop-btn" class="stop" onclick="stopStream()" disabled>Stop</button>
+  </div>
+</div>
+
+<script>
+const API = `${location.protocol}//${location.host}`;
+let ws = null;
+let streaming = false;
+let frameCount = 0;
+let lastFpsTime = Date.now();
+
+async function loadReferences() {
+  const resp = await fetch(`${API}/api/reference/status`);
+  const data = await resp.json();
+  const sel = document.getElementById('ref-select');
+  sel.innerHTML = '';
+  if (data.available.length === 0) {
+    sel.innerHTML = '<option value="">No references available</option>';
+    return;
+  }
+  data.available.forEach(r => {
+    const opt = document.createElement('option');
+    opt.value = r.name;
+    opt.textContent = `${r.name} (${r.size_mb.toFixed(1)} MB)`;
+    if (r.active) opt.selected = true;
+    sel.appendChild(opt);
+  });
+}
+loadReferences();
+
+function startStream() {
+  const ref = document.getElementById('ref-select').value;
+  if (!ref) { alert('Select a reference first'); return; }
+
+  // Select reference
+  fetch(`${API}/api/reference/select/${ref}`, { method: 'POST' });
+
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  ws = new WebSocket(`${proto}://${location.host}/ws/localize`);
+
+  ws.onopen = () => {
+    document.getElementById('ws-status').textContent = 'Connected';
+    document.getElementById('ws-status').className = 'connected';
+    streaming = true;
+    document.getElementById('start-btn').disabled = true;
+    document.getElementById('stop-btn').disabled = false;
+    // Start sending frames from webcam
+    startCapture();
+  };
+
+  ws.onmessage = (e) => {
+    const pose = JSON.parse(e.data);
+    updatePoseDisplay(pose);
+  };
+
+  ws.onclose = () => {
+    document.getElementById('ws-status').textContent = 'Disconnected';
+    document.getElementById('ws-status').className = 'disconnected';
+    streaming = false;
+    document.getElementById('start-btn').disabled = false;
+    document.getElementById('stop-btn').disabled = true;
+  };
+}
+
+function stopStream() {
+  streaming = false;
+  if (ws) ws.close();
+}
+
+let videoEl = null;
+let canvasEl = null;
+
+async function startCapture() {
+  if (!videoEl) {
+    videoEl = document.createElement('video');
+    videoEl.autoplay = true;
+    canvasEl = document.createElement('canvas');
+  }
+  const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 1280, height: 720 } });
+  videoEl.srcObject = stream;
+  await videoEl.play();
+  canvasEl.width = videoEl.videoWidth;
+  canvasEl.height = videoEl.videoHeight;
+  sendFrame();
+}
+
+function sendFrame() {
+  if (!streaming || !ws || ws.readyState !== WebSocket.OPEN) return;
+
+  const ctx = canvasEl.getContext('2d');
+  ctx.drawImage(videoEl, 0, 0);
+  canvasEl.toBlob((blob) => {
+    if (blob && ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(blob);
+      frameCount++;
+      const now = Date.now();
+      if (now - lastFpsTime > 1000) {
+        document.getElementById('fps-display').textContent = frameCount.toFixed(1);
+        frameCount = 0;
+        lastFpsTime = now;
+      }
+    }
+    // Send next frame after response (request-response pattern for now)
+  }, 'image/jpeg', 0.85);
+}
+
+function updatePoseDisplay(pose) {
+  if (pose.success) {
+    ['tx', 'ty', 'tz', 'qw', 'qx', 'qy', 'qz'].forEach(k => {
+      document.getElementById(k).textContent = pose[k].toFixed(4);
+    });
+    document.getElementById('inliers-display').textContent = pose.num_inliers;
+    if (pose.latency_ms) {
+      document.getElementById('latency-display').textContent = `${pose.latency_ms.toFixed(0)}ms`;
+    }
+    const log = document.getElementById('pose-log');
+    const line = `t=(${pose.tx.toFixed(2)}, ${pose.ty.toFixed(2)}, ${pose.tz.toFixed(2)}) inl=${pose.num_inliers}\n`;
+    log.textContent += line;
+    log.scrollTop = log.scrollHeight;
+  } else {
+    document.getElementById('inliers-display').textContent = 'FAIL';
+  }
+  // Request next frame after receiving pose
+  if (streaming) setTimeout(sendFrame, 50);
+}
+</script>
+</body>
+</html>
