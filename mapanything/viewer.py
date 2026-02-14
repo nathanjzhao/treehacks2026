@@ -1,8 +1,8 @@
 """
-Viser-based 3D viewer for VGGT GLB point clouds.
+Viser-based 3D viewer for MapAnything GLB point clouds.
 
-Usage: python viewer.py examples/           # browse all GLBs in directory
-       python viewer.py examples/out.glb    # open a specific file
+Usage: python viewer.py examples/        # browse all GLBs in directory
+       python viewer.py examples/out.glb  # open a specific file
 """
 
 import argparse
@@ -18,13 +18,14 @@ from fastapi.responses import HTMLResponse
 from jinja2 import Template
 
 
-def _camera_apex(mesh: trimesh.Trimesh) -> np.ndarray:
-    """Extract the cone apex (camera position) from a VGGT camera cone mesh."""
+def _cone_apex(mesh: trimesh.Trimesh) -> np.ndarray:
+    """Extract the cone apex (camera position) from a camera cone mesh.
+
+    The apex is the vertex shared by the most faces (the tip of the cone)."""
     faces = np.array(mesh.faces)
-    verts = np.array(mesh.vertices)
     counts = Counter(faces.flatten().tolist())
     apex_idx = max(counts, key=counts.get)
-    return verts[apex_idx]
+    return np.array(mesh.vertices[apex_idx])
 
 
 def _estimate_up(camera_meshes: list[trimesh.Trimesh], scene_centroid: np.ndarray) -> np.ndarray:
@@ -33,16 +34,16 @@ def _estimate_up(camera_meshes: list[trimesh.Trimesh], scene_centroid: np.ndarra
     Cameras are typically at roughly the same height, so the thinnest
     axis of the camera position distribution points "up"."""
     if len(camera_meshes) < 3:
-        return np.array([0.0, -1.0, 0.0])
+        return np.array([0.0, -1.0, 0.0])  # fallback: OpenCV -Y is up
 
-    positions = np.array([_camera_apex(m) for m in camera_meshes])
+    positions = np.array([_cone_apex(m) for m in camera_meshes])
     centered = positions - positions.mean(axis=0)
     cov = centered.T @ centered
     eigenvalues, eigenvectors = np.linalg.eigh(cov)
     # Smallest eigenvalue = thinnest spread = up direction
     up = eigenvectors[:, 0]
 
-    # Make sure "up" points from scene toward cameras
+    # Make sure "up" points away from scene centroid relative to cameras
     cam_mean = positions.mean(axis=0)
     if np.dot(up, cam_mean - scene_centroid) < 0:
         up = -up
@@ -51,7 +52,7 @@ def _estimate_up(camera_meshes: list[trimesh.Trimesh], scene_centroid: np.ndarra
 
 
 def load_glb(path: str) -> tuple[np.ndarray, np.ndarray, list[trimesh.Trimesh]]:
-    """Load a VGGT GLB and return (points, colors, camera_meshes)."""
+    """Load a MapAnything GLB and return (points, colors, camera_meshes)."""
     scene = trimesh.load(path)
 
     points = None
@@ -107,7 +108,7 @@ async def chat_ws(websocket: WebSocket):
 
 
 def _load_and_display(server: viser.ViserServer, glb_path: str, downsample: int):
-    """Load a GLB, downsample, and display it. Returns scene state tuple."""
+    """Load a GLB, downsample, and display it. Returns scene state dict."""
     points, colors, camera_meshes = load_glb(glb_path)
 
     if downsample > 1:
@@ -121,7 +122,7 @@ def _load_and_display(server: viser.ViserServer, glb_path: str, downsample: int)
     print(f"Estimated up direction: {up}")
 
     if camera_meshes:
-        first_cam_pos = _camera_apex(camera_meshes[0])
+        first_cam_pos = _cone_apex(camera_meshes[0])
         look_dir = centroid - first_cam_pos
         look_dir /= np.linalg.norm(look_dir) + 1e-8
         init_cam_pos = first_cam_pos - look_dir * 0.3
@@ -140,6 +141,7 @@ def _load_and_display(server: viser.ViserServer, glb_path: str, downsample: int)
         point_shape="rounded",
     )
 
+    # Move all connected clients to the new camera position
     for client in server.get_clients().values():
         client.camera.position = tuple(init_cam_pos)
         client.camera.look_at = tuple(centroid)
@@ -152,12 +154,12 @@ def _load_and_display(server: viser.ViserServer, glb_path: str, downsample: int)
 def main():
     global VISER_PORT
 
-    parser = argparse.ArgumentParser(description="View VGGT GLB point clouds")
+    parser = argparse.ArgumentParser(description="View MapAnything GLB point clouds")
     parser.add_argument("glb", help="Path to .glb file or directory of .glb files")
     parser.add_argument("--port", type=int, default=8080, help="Main web UI port")
     parser.add_argument("--viser-port", type=int, default=8081, help="Internal viser port")
-    parser.add_argument("--downsample", type=int, default=4,
-                        help="Keep every Nth point (default: 4)")
+    parser.add_argument("--downsample", type=int, default=20,
+                        help="Keep every Nth point (default: 20)")
     args = parser.parse_args()
     VISER_PORT = args.viser_port
 
@@ -167,6 +169,7 @@ def main():
         glb_files = sorted(glb_input.glob("*.glb"))
     else:
         glb_files = [glb_input]
+        # Also find siblings in the same directory
         siblings = sorted(glb_input.parent.glob("*.glb"))
         if len(siblings) > 1:
             glb_files = siblings
@@ -183,10 +186,12 @@ def main():
     # --- Start viser ---
     server = viser.ViserServer(host="0.0.0.0", port=args.viser_port)
 
+    # Load initial scene
     points, colors, centroid, init_cam_pos, base_point_size, up = _load_and_display(
         server, glb_map[initial_name], args.downsample
     )
 
+    # State shared between GUI callbacks
     state = {
         "points": points,
         "colors": colors,
@@ -197,6 +202,7 @@ def main():
     }
 
     with server.gui.add_folder("Viewer"):
+        # File picker dropdown
         if len(glb_files) > 1:
             gui_file = server.gui.add_dropdown(
                 "Scene",
@@ -242,6 +248,7 @@ def main():
     print(f"\nViser running on http://localhost:{args.viser_port}")
     print(f"Web UI at http://localhost:{args.port}")
 
+    # --- Run FastAPI on main thread ---
     uvicorn.run(app, host="0.0.0.0", port=args.port, log_level="info")
 
 

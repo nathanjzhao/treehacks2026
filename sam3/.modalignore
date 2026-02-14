@@ -1,0 +1,10 @@
+*.png
+*.jpg
+*.jpeg
+*.glb
+*.mp4
+*.mov
+*.MOV
+__pycache__
+.playwright-mcp
+examples/
