@@ -1,52 +1,46 @@
-# Audio Integration: Meta Ray-Ban Gen 3 → Mira
+# Integration Guide: Meta Ray-Ban Gen 3 → Mira
 
-This document describes how to wire audio from Meta Ray-Ban Gen 3 glasses through the Mira backend, enabling voice-driven interactions for assisted living residents.
+How to connect the Ray-Ban glasses to the Mira backend for voice-driven interactions.
 
 ---
 
-## Architecture Overview
+## Architecture
 
 ```
 Ray-Ban Gen 3 (mic)
     │ Bluetooth audio
     ▼
-Android Phone (DAT SDK)
-    │ captures audio stream
+Android Phone
+    │ captures audio, sends to Whisper
     ▼
-┌─────────────────────────────────┐
-│  Whisper STT                    │
-│  POST /api/voice/transcribe     │
-│  (or direct OpenAI Whisper API) │
-└────────────┬────────────────────┘
-             │ transcribed text
-             ▼
-┌─────────────────────────────────┐
-│  Mira Chat LLM (SSE stream)    │
-│  POST /api/chat                 │
-│  OpenRouter → gpt-4o-mini       │
-│  with function calling:         │
-│   • find_object                 │
-│   • escalate_to_caregiver       │
-│   • lookup_medication           │
-└────────────┬────────────────────┘
-             │ SSE events + final reply
-             ▼
-┌─────────────────────────────────┐
-│  Response routing:              │
-│  • TTS → glasses speaker        │
-│  • /stream page (HUD overlay)   │
-│  • Dashboard (realtime feed)    │
-│  • Android app UI               │
-└─────────────────────────────────┘
+OpenAI Whisper API ──→ transcript text
+    │
+    ▼
+Mira Backend (POST /api/chat)
+    │ SSE stream with steps + reply
+    │
+    ├──→ Android app (parse SSE, get reply text)
+    │        │
+    │        ▼
+    │    POST /api/voice/tts ──→ audio bytes ──→ glasses speaker
+    │
+    ├──→ /stream page (HUD overlay, mirrors chat via Supabase Realtime)
+    │
+    ├──→ /dashboard (auto-updates via Supabase Realtime)
+    │
+    └──→ Explorer 3D viewer (triggered automatically on find_object)
+             └──→ second monitor shows camera flying to object
 ```
+
+**3 network hops:** Android → Whisper API, Android → Mira `/api/chat`, Android → Mira `/api/voice/tts`
 
 ---
 
 ## Step 1: Capture Audio from Ray-Ban Gen 3
 
-The glasses stream audio to the phone over Bluetooth. On Android, the glasses mic shows up as a Bluetooth SCO audio source. You do NOT need the DAT SDK for audio capture — standard Android audio APIs work.
+The glasses stream audio to the phone over Bluetooth. On Android, the glasses mic shows up as a Bluetooth SCO audio source.
 
-### Option A: Standard Android AudioRecord (recommended)
+### Standard Android AudioRecord
 
 ```kotlin
 import android.media.AudioFormat
@@ -77,22 +71,7 @@ val recorder = AudioRecord(
 recorder.startRecording()
 ```
 
-### Option B: MediaRecorder (simpler, outputs file)
-
-```kotlin
-val recorder = MediaRecorder().apply {
-    setAudioSource(MediaRecorder.AudioSource.DEFAULT)
-    setOutputFormat(MediaRecorder.OutputFormat.WEBM)
-    setAudioEncoder(MediaRecorder.AudioEncoder.OPUS)
-    setOutputFile(outputFile.absolutePath)
-    prepare()
-    start()
-}
-```
-
 ### Voice Activity Detection (silence auto-stop)
-
-The web app uses these VAD parameters — replicate on Android:
 
 | Parameter | Value | Description |
 |-----------|-------|-------------|
@@ -101,39 +80,11 @@ The web app uses these VAD parameters — replicate on Android:
 | `MIN_SPEECH_DURATION_MS` | 2000 | Must speak 2s before silence detection starts |
 | `MAX_RECORDING_MS` | 30000 | 30s hard cap |
 
-Compute RMS from PCM samples:
-```kotlin
-fun computeRms(buffer: ShortArray, bytesRead: Int): Double {
-    var sum = 0.0
-    for (i in 0 until bytesRead) {
-        val normalized = buffer[i].toDouble() / Short.MAX_VALUE
-        sum += normalized * normalized
-    }
-    return sqrt(sum / bytesRead) * 128  // scale to 0-128
-}
-```
-
 ---
 
-## Step 2: Send Audio to Whisper for Transcription
+## Step 2: Transcribe with Whisper (on Android)
 
-### Option A: Use Mira's proxy endpoint
-
-```
-POST {MIRA_BASE_URL}/api/voice/transcribe
-Content-Type: multipart/form-data
-
-Form field: "audio" = <audio file> (webm/opus, mp3, wav, m4a all work)
-```
-
-**Response:**
-```json
-{ "ok": true, "text": "Where are my pills?" }
-```
-
-This proxies to OpenAI Whisper (`whisper-1` model). The server needs `OPENAI_API_KEY` in env.
-
-### Option B: Call OpenAI Whisper directly from Android (lower latency)
+The Android app calls OpenAI Whisper directly, then sends the transcript to Mira.
 
 ```kotlin
 val client = OkHttpClient()
@@ -156,13 +107,14 @@ val request = Request.Builder()
 val response = client.newCall(request).execute()
 val json = JSONObject(response.body!!.string())
 val transcribedText = json.getString("text")
+// Now send transcribedText to Mira's /api/chat (Step 3)
 ```
 
 ---
 
-## Step 3: Send Transcribed Text to Mira Chat API
+## Step 3: Send Transcript to Mira Chat API
 
-The chat endpoint returns an **SSE (Server-Sent Events) stream** with real-time processing steps, then a final result.
+POST the transcript text to `/api/chat`. The response is an **SSE (Server-Sent Events) stream** with real-time processing steps, streaming text, then a final result.
 
 ### Request
 
@@ -185,60 +137,73 @@ Content-Type: application/json
 
 ### SSE Response Format
 
-The response is `Content-Type: text/event-stream`. Each event is a line like:
+The response is `Content-Type: text/event-stream`. Each event is a line:
 
 ```
 data: {"type":"step","index":0,"label":"Interpreting your message","status":"active"}
-
 data: {"type":"step_done","index":0}
 
 data: {"type":"step","index":1,"label":"Reviewing health records","status":"active"}
-
 data: {"type":"step_done","index":1}
 
 data: {"type":"step","index":2,"label":"Recalling conversation","status":"active"}
-
 data: {"type":"step_done","index":2}
 
 data: {"type":"step","index":3,"label":"Thinking","status":"active","detail":"Analyzing intent…"}
-
 data: {"type":"step_done","index":3}
 
 data: {"type":"step","index":4,"label":"Searching for pill organizer","status":"active","searches":["pill organizer"]}
-
 data: {"type":"step_done","index":4}
 
-data: {"type":"step","index":5,"label":"Composing response","status":"active"}
-
+// If find_object triggered, explorer sub-steps appear here:
+data: {"type":"step","index":5,"label":"Scanning the scene...","status":"active"}
 data: {"type":"step_done","index":5}
+data: {"type":"step","index":6,"label":"Asking AI to find 'pill organizer'...","status":"active"}
+data: {"type":"step_done","index":6}
+data: {"type":"step","index":7,"label":"Triangulating 3D position...","status":"active"}
+data: {"type":"step_done","index":7}
+data: {"type":"step","index":8,"label":"Found it! Flying to object...","status":"active"}
+data: {"type":"step_done","index":8}
 
-data: {"type":"result","ok":true,"reply":"I'm looking for your pill organizer now...","action":"FIND_OBJECT","request_id":"uuid-here","object_name":"pill organizer","event_id":"uuid-here"}
+data: {"type":"step","index":9,"label":"Composing response","status":"active"}
+
+// Streaming text chunks of the reply (arrive as the LLM generates):
+data: {"type":"text","chunk":"I found your "}
+data: {"type":"text","chunk":"pill organizer! "}
+data: {"type":"text","chunk":"It's on the dresser."}
+
+data: {"type":"step_done","index":9}
+
+data: {"type":"result","ok":true,"reply":"I found your pill organizer! It's on the dresser.","action":"FIND_OBJECT","request_id":"uuid","object_name":"pill organizer","event_id":"uuid"}
 ```
 
 ### Event types
 
 | type | Fields | Description |
 |------|--------|-------------|
-| `step` | `index`, `label`, `status`, `detail?`, `searches?` | New processing step started |
-| `step_done` | `index` | Step at index completed |
-| `text` | `chunk` | Streaming text chunk of the final reply (arrives before `result`) |
-| `result` | `ok`, `reply`, `action`, `request_id?`, `object_name?`, `citations?`, `event_id` | Final response |
-
-**Note:** When `find_object` is triggered, additional steps appear from the 3D scene explorer (e.g., "Scanning the scene...", "Asking AI to find 'pills'...", "Triangulating 3D position...", "Found it! Flying to object..."). These are real-time status updates from the explorer and will appear between the "Searching for ..." step and the "Composing response" step.
+| `step` | `index`, `label`, `status`, `detail?`, `searches?` | Processing step started |
+| `step_done` | `index` | Step completed |
+| `text` | `chunk` | Streaming text chunk of the reply (concatenate all chunks = full reply) |
+| `result` | `ok`, `reply`, `action`, `request_id?`, `object_name?`, `citations?`, `event_id` | Final response with complete reply |
 
 ### `action` values in result
 
 | Action | Meaning | Extra fields |
 |--------|---------|-------------|
-| `ANSWER` | General Q&A response | — |
-| `FIND_OBJECT` | Object search initiated | `request_id`, `object_name` |
+| `ANSWER` | General Q&A or medical info response | `citations?` (if Perplexity Sonar was used) |
+| `FIND_OBJECT` | Object found/searched in 3D scene | `request_id`, `object_name` |
 | `ESCALATE` | Caregiver alerted via SMS | — |
 
-### Android SSE parsing
+### What the Android app needs to do
+
+For the **minimum viable integration**, the Android app only needs to care about `result` events:
 
 ```kotlin
-val client = OkHttpClient()
-val body = """{"patient_id":"$patientId","message":"$text"}"""
+val client = OkHttpClient.Builder()
+    .readTimeout(60, TimeUnit.SECONDS)  // explorer search can take up to 45s
+    .build()
+
+val body = """{"patient_id":"$patientId","message":"$transcribedText"}"""
     .toRequestBody("application/json".toMediaType())
 
 val request = Request.Builder()
@@ -255,18 +220,11 @@ client.newCall(request).enqueue(object : Callback {
             val json = JSONObject(line.removePrefix("data: "))
 
             when (json.getString("type")) {
-                "step" -> {
-                    // Show step in UI: json.getString("label")
-                    Log.d("Mira", "Step: ${json.getString("label")}")
-                }
-                "step_done" -> {
-                    // Mark step complete
-                }
                 "result" -> {
                     val reply = json.getString("reply")
                     val action = json.getString("action")
-                    // Use reply for TTS, display, etc.
-                    handleResult(reply, action, json)
+                    // Send reply to TTS (Step 4)
+                    playTTS(reply)
                 }
             }
         }
@@ -278,22 +236,22 @@ client.newCall(request).enqueue(object : Callback {
 })
 ```
 
+**Important:** Set a read timeout of at least 60 seconds. When `find_object` is triggered, the explorer 3D search can take 10-30 seconds before returning a result.
+
 ---
 
-## Step 4: Route the Response
+## Step 4: Play Response via TTS
 
-Once you have `reply` from the `result` event:
-
-### 4a. Text-to-Speech (play through glasses speaker)
+Once you have `reply` from the `result` event, send it to the TTS endpoint:
 
 ```
 POST {MIRA_BASE_URL}/api/voice/tts
 Content-Type: application/json
 
-{ "text": "I found your pill organizer on the garden table." }
+{ "text": "I found your pill organizer on the dresser." }
 ```
 
-**Response:** Raw `audio/mpeg` bytes. Play directly:
+**Response:** Raw `audio/mpeg` bytes (ElevenLabs, Alice voice). Play directly through the glasses speaker:
 
 ```kotlin
 val ttsBody = """{"text":"$reply"}"""
@@ -313,7 +271,6 @@ tempFile.writeBytes(audioBytes)
 
 MediaPlayer().apply {
     setDataSource(tempFile.absolutePath)
-    // Route to Bluetooth speaker (glasses)
     setAudioAttributes(AudioAttributes.Builder()
         .setUsage(AudioAttributes.USAGE_ASSISTANT)
         .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
@@ -323,77 +280,64 @@ MediaPlayer().apply {
 }
 ```
 
-Uses ElevenLabs (Alice voice, `eleven_turbo_v2_5` model). Needs `ELEVENLABS_API_KEY` in server env.
-
-### 4b. Send steps + reply to /stream page (HUD overlay)
-
-The `/stream` page at `{MIRA_BASE_URL}/stream` shows a HUD overlay for demo purposes. Currently it uses scripted demo chains. To wire it to real data:
-
-1. Forward the SSE step events from `/api/chat` to the `/stream` page via WebSocket or shared state
-2. Or: have the Android app POST to a relay endpoint that the `/stream` page subscribes to
-3. Simplest for hackathon: have the `/stream` page also call `/api/chat` directly (it already has Web Speech API built in)
-
-### 4c. Dashboard updates automatically
-
-The dashboard at `{MIRA_BASE_URL}/dashboard` subscribes to Supabase Realtime on the `events` table. All chat messages, object searches, and escalations appear automatically — no extra wiring needed.
-
 ---
 
-## Step 5: Object Finding Flow (end-to-end)
+## Step 5: What Happens Behind the Scenes
 
-When the LLM decides to search for an object, the chat API handles everything inline:
+You don't need to implement any of this — it's handled by the Mira backend automatically. This is just for context.
 
-1. Chat API calls `find_object` tool → creates `object_requests` row (status: PENDING)
-2. Chat API emits `FIND_OBJECT_REQUESTED` event
-3. Chat API connects to the **Explorer 3D viewer** via WebSocket (`ws://localhost:8080/ws/chat`)
-4. Sends `{"message": "find the pill organizer"}` to the explorer
-5. Explorer scans the 3D point cloud scene, sends status updates back:
-   - `{"role": "status", "content": "Scanning the scene..."}`
-   - `{"role": "status", "content": "Asking AI to find 'pill organizer'..."}`
-   - `{"role": "status", "content": "Triangulating 3D position..."}`
-   - `{"role": "status", "content": "Found it! Flying to object..."}`
-6. These statuses stream to the device/stream UI as SSE step events in real time
-7. Explorer returns final result: `{"role": "assistant", "content": "Found: pill organizer on the dresser (seen in 3 views)"}`
-8. Chat API updates `object_requests` → FOUND or NOT_FOUND
-9. LLM composes a natural response using the explorer's result
-10. On the second monitor, the Explorer 3D viewer flies the camera to the object and shows a pulsing marker
+### General Q&A / Medical Info
+1. LLM detects intent → calls `lookup_medication` or `search_medical_info` (Perplexity Sonar)
+2. Returns answer with optional citations
 
-**The explorer must be running** at `ws://localhost:8080/ws/chat` (configurable via `EXPLORER_WS_URL` env var). If it's not running, the chat API gracefully falls back with a "could not connect" message and the LLM still responds.
+### Object Finding
+1. LLM detects "find object" intent → calls `find_object` tool
+2. Mira backend connects to the **Explorer 3D viewer** via WebSocket (`ws://localhost:8080/ws/chat`)
+3. Explorer scans the 3D point cloud, sends status updates that stream to the device as SSE steps
+4. Explorer returns result → LLM composes a natural response
+5. On the second demo monitor, the Explorer flies the camera to the object with a pulsing marker
 
-```bash
-# Start the explorer (from repo root):
-cd explorer && python viewer.py /path/to/scene.glb --port 8080 --viser-port 8081
-```
+### Caregiver Escalation
+1. LLM detects emergency → calls `escalate_to_caregiver`
+2. SMS sent via Twilio to the caregiver
+3. Event logged to dashboard
 
-**Legacy `/api/objects/update` endpoint** still exists if you need to report object locations from an external CV pipeline, but the primary flow now uses the direct explorer integration above.
+### Automatic UI Updates
+- `/stream` page (HUD overlay on first monitor) mirrors the chat via Supabase Realtime — no wiring needed
+- `/dashboard` page auto-updates from the events table — no wiring needed
 
 ---
 
 ## Environment Variables
 
-Server-side (`.env.local` on the Next.js app):
+**Android app needs:**
+```
+OPENAI_API_KEY=sk-...                   # For Whisper STT
+MIRA_BASE_URL=http://<computer-ip>:3000 # Mira backend (local IP on same WiFi)
+```
 
+**Mira server (`.env.local`):**
 ```bash
-# Required
+# Supabase
 NEXT_PUBLIC_SUPABASE_URL=https://your-project.supabase.co
 NEXT_PUBLIC_SUPABASE_ANON_KEY=your-anon-key
 SUPABASE_URL=https://your-project.supabase.co
 SUPABASE_SERVICE_ROLE_KEY=your-service-role-key
-OPENROUTER_API_KEY=sk-or-v1-...        # LLM (gpt-4o-mini)
-OPENAI_API_KEY=sk-...                   # Whisper STT
+
+# LLM + Search
+OPENROUTER_API_KEY=sk-or-v1-...        # gpt-4o-mini + Perplexity Sonar
+
+# Voice
 ELEVENLABS_API_KEY=...                  # TTS
 
-# Optional
-TWILIO_ACCOUNT_SID=...                  # SMS escalation
+# Escalation (optional)
+TWILIO_ACCOUNT_SID=...
 TWILIO_AUTH_TOKEN=...
 TWILIO_PHONE_NUMBER=+1XXXXXXXXXX
 TWILIO_ALERT_TO=+1XXXXXXXXXX
-```
 
-Android-side (if calling Whisper directly):
-```
-OPENAI_API_KEY=sk-...
-MIRA_BASE_URL=https://your-deployed-url.vercel.app  # or local IP for dev
+# Explorer (optional, defaults to ws://localhost:8080/ws/chat)
+EXPLORER_WS_URL=ws://localhost:8080/ws/chat
 ```
 
 ---
@@ -403,51 +347,27 @@ MIRA_BASE_URL=https://your-deployed-url.vercel.app  # or local IP for dev
 ```bash
 BASE=http://localhost:3000
 
-# 1. Transcribe audio
-curl -X POST $BASE/api/voice/transcribe \
-  -F "audio=@test.webm"
-
-# 2. Chat (SSE stream)
+# Chat (SSE stream) — this is the main endpoint your app calls
 curl -N -X POST $BASE/api/chat \
   -H "Content-Type: application/json" \
   -d '{"patient_id":"a1b2c3d4-0001-4000-8000-000000000001","message":"Where are my pills?"}'
 
-# 3. TTS
+# TTS
 curl -X POST $BASE/api/voice/tts \
   -H "Content-Type: application/json" \
   -d '{"text":"Hello Margaret"}' \
   --output test.mp3
-
-# 4. Report object found (CV team)
-curl -X POST $BASE/api/objects/update \
-  -H "Content-Type: application/json" \
-  -d '{"request_id":"<from-chat-result>","patient_id":"a1b2c3d4-0001-4000-8000-000000000001","object_name":"pill organizer","found":true,"location":"Garden table","confidence":0.94}'
 ```
 
 ---
 
-## File Map (key files in the chat branch)
+## Summary: What the Android App Does
 
 ```
-app/
-├── api/
-│   ├── chat/route.ts          # Main chat endpoint (SSE stream, function calling)
-│   ├── voice/
-│   │   ├── transcribe/route.ts # Whisper STT proxy
-│   │   └── tts/route.ts        # ElevenLabs TTS
-│   ├── objects/
-│   │   ├── request/route.ts    # Create object search request
-│   │   └── update/route.ts     # CV team reports result
-│   ├── escalate/route.ts       # Manual caregiver escalation
-│   ├── events/route.ts         # Event CRUD
-│   └── patients/route.ts       # List patients
-├── device/page.tsx             # Resident chat UI (web)
-├── dashboard/page.tsx          # Supervisor dashboard
-├── stream/page.tsx             # AR glasses HUD overlay (demo)
-└── page.tsx                    # Landing page
-lib/
-├── event-spine.ts              # Event logging (appendEvent, getRecentEvents)
-├── supabase-server.ts          # Server Supabase client
-├── supabase/client.ts          # Browser Supabase client
-└── twilio.ts                   # SMS sending
+1. Record audio from Ray-Ban mic (Bluetooth SCO)
+2. Send audio to OpenAI Whisper API → get transcript
+3. POST transcript to MIRA_BASE_URL/api/chat → parse SSE, get reply from "result" event
+4. POST reply text to MIRA_BASE_URL/api/voice/tts → get audio bytes → play on glasses speaker
 ```
+
+That's it. Everything else (object finding, escalation, dashboard, stream page) is handled by the Mira backend.
