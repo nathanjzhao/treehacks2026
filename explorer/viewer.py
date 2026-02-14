@@ -28,6 +28,30 @@ def _camera_apex(mesh: trimesh.Trimesh) -> np.ndarray:
     return verts[apex_idx]
 
 
+def _camera_pose(mesh: trimesh.Trimesh) -> tuple[np.ndarray, np.ndarray]:
+    """Extract camera position AND look direction from a VGGT cone mesh.
+
+    The cone apex = camera position. The direction from apex to base center
+    = the original camera look direction from the photo.
+    """
+    faces = np.array(mesh.faces)
+    verts = np.array(mesh.vertices)
+    counts = Counter(faces.flatten().tolist())
+    apex_idx = max(counts, key=counts.get)
+    apex = verts[apex_idx]
+
+    # Base vertices = all except apex
+    base_mask = np.ones(len(verts), dtype=bool)
+    base_mask[apex_idx] = False
+    base_center = verts[base_mask].mean(axis=0)
+
+    # Look direction: apex → base center
+    look_dir = base_center - apex
+    look_dir = look_dir / (np.linalg.norm(look_dir) + 1e-8)
+
+    return apex, look_dir
+
+
 def load_glb(path: str) -> tuple[np.ndarray, np.ndarray, list[trimesh.Trimesh]]:
     """Load a VGGT GLB and return (points, colors, camera_meshes)."""
     scene = trimesh.load(path)
@@ -63,9 +87,12 @@ class AppState:
 
     def __init__(self):
         self.points: np.ndarray | None = None
+        self.colors: np.ndarray | None = None
         self.centroid: np.ndarray | None = None
         self.active_client: viser.ClientHandle | None = None
         self.camera_positions: list[np.ndarray] | None = None
+        self.camera_look_dirs: list[np.ndarray] | None = None
+        self.viser_server: viser.ViserServer | None = None
 
 
 state = AppState()
@@ -119,10 +146,13 @@ async def chat_ws(websocket: WebSocket):
                     query=msg,
                     client=client,
                     points=state.points,
+                    colors=state.colors,
                     centroid=state.centroid,
                     send_status=send_status,
                     send_result=send_result,
                     camera_positions=state.camera_positions,
+                    camera_look_dirs=state.camera_look_dirs,
+                    server=state.viser_server,
                 )
             except Exception as e:
                 await websocket.send_json({
@@ -158,13 +188,20 @@ def main():
     # Compute scene centroid
     centroid = points.mean(axis=0)
 
-    # Extract camera positions from VGGT cones
-    cam_positions = [_camera_apex(m) for m in camera_meshes]
+    # Extract camera positions AND orientations from VGGT cones
+    cam_positions = []
+    cam_look_dirs = []
+    for m in camera_meshes:
+        pos, look = _camera_pose(m)
+        cam_positions.append(pos)
+        cam_look_dirs.append(look)
 
     # Store in shared state
     state.points = points
+    state.colors = colors
     state.centroid = centroid
     state.camera_positions = cam_positions
+    state.camera_look_dirs = cam_look_dirs
 
     # Use first VGGT camera as the initial viewer position
     if camera_meshes:
@@ -179,6 +216,7 @@ def main():
 
     # --- Start viser ---
     server = viser.ViserServer(host="0.0.0.0", port=args.viser_port)
+    state.viser_server = server
 
     server.scene.add_point_cloud(
         name="/point_cloud",

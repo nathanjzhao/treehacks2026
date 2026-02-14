@@ -32,13 +32,8 @@ async def query_object_location(
 ) -> dict:
     """Send rendered views to a vision LLM and ask it to locate an object.
 
-    Args:
-        query: User's object query (e.g., "show me the chair")
-        renders: List of numpy RGB arrays (H, W, 3)
-        labels: Labels for each view (e.g., "az0_el25")
-
-    Returns:
-        Dict with keys: view_index, pixel_x, pixel_y, description, confidence
+    Returns dict with keys: description, detections (list of per-view bboxes).
+    Each detection has: view_index, bbox [x1, y1, x2, y2], confidence.
     """
     image_content = []
     for i, (render, label) in enumerate(zip(renders, labels)):
@@ -54,17 +49,28 @@ async def query_object_location(
             },
         })
 
+    img_h, img_w = renders[0].shape[:2]
+
     system_prompt = (
         "You are an expert at finding objects in 3D point cloud renders of indoor scenes. "
         "These are rendered from a sparse point cloud, so objects may look rough, have gaps, "
-        "or appear as scattered dots — this is normal. Use shape, color, and context clues.\n\n"
-        "Reply with ONLY a JSON object, no other text.\n\n"
-        "Format: "
-        '{"view_index": <int>, "pixel_x": <int 0-640>, "pixel_y": <int 0-480>, '
-        '"description": "<brief>", "confidence": <float 0-1>}\n\n'
-        "Pick the view where the object is most visible. Point to its approximate center.\n"
-        "Be generous with confidence — if you can see anything that could be the object, "
-        "set confidence >= 0.3. Only use confidence 0.0 if the object is truly absent from ALL views."
+        "or appear as scattered dots. Use shape, color, and spatial context.\n\n"
+        "You are given multiple camera views of the SAME scene. The object may be visible "
+        "in several views from different angles.\n\n"
+        "For EACH view where the object is visible, provide a bounding box around it.\n\n"
+        "Reply with ONLY a JSON object:\n"
+        "{\n"
+        '  "description": "<what you found>",\n'
+        '  "detections": [\n'
+        f'    {{"view_index": 0, "bbox": [x1, y1, x2, y2], "confidence": 0.9}},\n'
+        "    ...\n"
+        "  ]\n"
+        "}\n\n"
+        f"bbox coordinates: x in [0, {img_w}], y in [0, {img_h}]. "
+        "Draw a tight box around the object.\n"
+        "Provide detections for EVERY view where you can see the object — "
+        "more views = better 3D localization.\n"
+        "If not found in any view: empty detections list and description \"not found\"."
     )
 
     messages = [
@@ -82,7 +88,7 @@ async def query_object_location(
         "model": MODEL,
         "messages": messages,
         "temperature": 0.0,
-        "max_tokens": 500,
+        "max_tokens": 1000,
     }
 
     content = None
@@ -102,7 +108,7 @@ async def query_object_location(
                 result = response.json()
 
             content = result["choices"][0]["message"]["content"].strip()
-            print(f"[OpenRouter] Raw LLM response: {content[:500]}", flush=True)
+            print(f"[OpenRouter] Raw LLM response: {content[:800]}", flush=True)
             break
         except Exception as e:
             last_error = e
@@ -112,15 +118,35 @@ async def query_object_location(
 
     if content is None:
         print(f"[OpenRouter] All attempts failed: {last_error}", flush=True)
-        return {
-            "view_index": 0,
-            "pixel_x": 320,
-            "pixel_y": 240,
-            "description": f"API error: {last_error}",
-            "confidence": 0.0,
-        }
+        return {"description": f"API error: {last_error}", "detections": []}
 
-    # Try direct parse first
+    # Parse JSON response
+    parsed = _parse_json(content)
+    if parsed is None:
+        print(f"[OpenRouter] Failed to parse JSON: {content[:300]}", flush=True)
+        return {"description": "Failed to parse LLM response", "detections": []}
+
+    # Validate detections
+    detections = parsed.get("detections", [])
+    valid = []
+    for det in detections:
+        bbox = det.get("bbox")
+        vi = det.get("view_index")
+        if bbox and len(bbox) == 4 and vi is not None:
+            valid.append({
+                "view_index": int(vi),
+                "bbox": [float(b) for b in bbox],
+                "confidence": float(det.get("confidence", 0.5)),
+            })
+
+    parsed["detections"] = valid
+    print(f"[OpenRouter] {len(valid)} valid detections", flush=True)
+    return parsed
+
+
+def _parse_json(content: str) -> dict | None:
+    """Try multiple strategies to extract JSON from LLM output."""
+    # Direct parse
     try:
         return json.loads(content)
     except json.JSONDecodeError:
@@ -128,26 +154,19 @@ async def query_object_location(
 
     # Strip markdown code blocks
     if "```" in content:
-        match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", content, re.DOTALL)
+        match = re.search(r"```(?:json)?\s*(\{.*\})\s*```", content, re.DOTALL)
         if match:
             try:
                 return json.loads(match.group(1))
             except json.JSONDecodeError:
                 pass
 
-    # Extract first JSON object from anywhere in the response
-    match = re.search(r"\{[^{}]*\"view_index\"[^{}]*\}", content)
+    # Find outermost JSON object
+    match = re.search(r"\{.*\}", content, re.DOTALL)
     if match:
         try:
             return json.loads(match.group(0))
         except json.JSONDecodeError:
             pass
 
-    print(f"[OpenRouter] Failed to parse JSON: {content[:300]}", flush=True)
-    return {
-        "view_index": 0,
-        "pixel_x": 320,
-        "pixel_y": 240,
-        "description": f"LLM response was not valid JSON: {content[:100]}",
-        "confidence": 0.0,
-    }
+    return None

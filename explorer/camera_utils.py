@@ -144,6 +144,154 @@ def unproject_pixel_to_3d(
     return points[original_indices[best_idx]]
 
 
+def points_in_bbox(
+    bbox: list[float],
+    img_width: int,
+    img_height: int,
+    cam_position: np.ndarray,
+    cam_wxyz: np.ndarray,
+    fov_y: float,
+    points: np.ndarray,
+) -> np.ndarray:
+    """Return indices of points that project inside bbox [x1, y1, x2, y2]."""
+    R = wxyz_to_rotation_matrix(cam_wxyz)
+    points_cam = (points - cam_position) @ R
+
+    in_front = points_cam[:, 2] > 0
+    if not np.any(in_front):
+        return np.array([], dtype=int)
+
+    points_front = points_cam[in_front]
+    original_indices = np.where(in_front)[0]
+
+    f_y = img_height / (2.0 * np.tan(fov_y / 2.0))
+    f_x = f_y
+    cx, cy = img_width / 2.0, img_height / 2.0
+
+    depth = points_front[:, 2]
+    proj_x = f_x * points_front[:, 0] / depth + cx
+    proj_y = f_y * points_front[:, 1] / depth + cy
+
+    x1, y1, x2, y2 = bbox
+    inside = (proj_x >= x1) & (proj_x <= x2) & (proj_y >= y1) & (proj_y <= y2)
+
+    return original_indices[inside]
+
+
+def localize_by_ray(
+    detections: list[dict],
+    viewpoints: list[dict],
+    points: np.ndarray,
+    img_width: int,
+    img_height: int,
+    fov_y: float,
+) -> np.ndarray:
+    """Localize by raycasting through bbox center and finding the first surface.
+
+    Uses ONLY the best detection (highest confidence). Casts a ray from the
+    camera through the center of the bbox, finds all points near that ray,
+    then uses a depth histogram to find the FIRST (nearest) surface.
+
+    This is geometrically correct and doesn't suffer from multi-view
+    averaging artifacts.
+    """
+    # Pick the single best detection
+    best_det = max(detections, key=lambda d: d.get("confidence", 0))
+    vi = best_det["view_index"]
+    if vi >= len(viewpoints):
+        vi = 0
+    vp = viewpoints[vi]
+    bbox = best_det["bbox"]
+
+    # Bbox center = target pixel
+    cx = (bbox[0] + bbox[2]) / 2.0
+    cy = (bbox[1] + bbox[3]) / 2.0
+    # Use half the smaller bbox dimension as search radius
+    bbox_half = min(bbox[2] - bbox[0], bbox[3] - bbox[1]) / 2.0
+    search_radius = max(bbox_half, 20.0)
+
+    print(f"[Raycast] Best detection: view {vi}, bbox={bbox}, center=({cx:.0f},{cy:.0f}), "
+          f"search_radius={search_radius:.0f}px", flush=True)
+
+    R = wxyz_to_rotation_matrix(vp["wxyz"])
+    points_cam = (points - vp["position"]) @ R
+
+    # Only points in front of camera
+    in_front = points_cam[:, 2] > 0.01
+    pts = points_cam[in_front]
+    orig_idx = np.where(in_front)[0]
+
+    if len(pts) == 0:
+        print("[Raycast] WARNING: no points in front of camera", flush=True)
+        return points.mean(axis=0)
+
+    # Project all points to image plane
+    f = img_height / (2.0 * np.tan(fov_y / 2.0))
+    depth = pts[:, 2]
+    proj_x = f * pts[:, 0] / depth + img_width / 2.0
+    proj_y = f * pts[:, 1] / depth + img_height / 2.0
+
+    # Find points projecting near the bbox center (within search radius)
+    dist_sq = (proj_x - cx) ** 2 + (proj_y - cy) ** 2
+    in_cone = dist_sq < search_radius ** 2
+
+    if in_cone.sum() < 5:
+        # Expand search
+        in_cone = dist_sq < (search_radius * 3) ** 2
+        print(f"[Raycast] Expanded search: {in_cone.sum()} points", flush=True)
+
+    if in_cone.sum() < 3:
+        # Total fallback: nearest projected point
+        best = np.argmin(dist_sq)
+        print(f"[Raycast] Fallback to nearest projected point", flush=True)
+        return points[orig_idx[best]]
+
+    cone_depths = depth[in_cone]
+    cone_world_idx = orig_idx[in_cone]
+
+    # Build depth histogram to find the FIRST (nearest) surface
+    n_bins = 40
+    hist, bin_edges = np.histogram(cone_depths, bins=n_bins)
+
+    # Find the first significant peak (nearest surface)
+    # A peak = a bin with at least 15% of the max count
+    peak_threshold = max(hist.max() * 0.15, 3)
+    peak_bin = None
+    for i in range(len(hist)):
+        if hist[i] >= peak_threshold:
+            peak_bin = i
+            break
+
+    if peak_bin is not None:
+        # Expand the peak to adjacent bins that are also significant
+        peak_start = peak_bin
+        peak_end = peak_bin
+        while peak_end + 1 < len(hist) and hist[peak_end + 1] >= peak_threshold * 0.5:
+            peak_end += 1
+            if peak_end - peak_start > 4:  # don't expand too much
+                break
+
+        surface_depth_min = bin_edges[peak_start]
+        surface_depth_max = bin_edges[peak_end + 1]
+        print(f"[Raycast] First surface at depth [{surface_depth_min:.3f}, {surface_depth_max:.3f}]", flush=True)
+    else:
+        # No clear peak — use nearest 20% of points
+        surface_depth_max = np.percentile(cone_depths, 20)
+        surface_depth_min = cone_depths.min()
+        print(f"[Raycast] No clear peak, using nearest 20%", flush=True)
+
+    # Keep only points at the first surface depth
+    surface_mask = (cone_depths >= surface_depth_min) & (cone_depths <= surface_depth_max)
+    surface_idx = cone_world_idx[surface_mask]
+
+    if len(surface_idx) == 0:
+        surface_idx = cone_world_idx[:10]
+
+    target = points[surface_idx].mean(axis=0)
+    print(f"[Raycast] {len(surface_idx)} surface points -> target {target}", flush=True)
+    return target
+
+
 def interpolate_camera(
     start_pos: np.ndarray,
     start_look_at: np.ndarray,
