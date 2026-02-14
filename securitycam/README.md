@@ -1,25 +1,23 @@
 # Phone Camera → localhost Stream
 
-Stream your iPhone camera to `localhost` on your computer over any network using mediamtx + Larix Broadcaster + Tailscale.
+Stream your iPhone camera to `localhost` on your computer for use in custom apps.
 
-## Prerequisites
+## Option A: Camo (same network / USB)
 
-- **mediamtx** — lightweight media server ([releases](https://github.com/bluenviron/mediamtx/releases))
-- **Larix Broadcaster** — iOS RTMP streaming app ([App Store](https://apps.apple.com/us/app/larix-broadcaster/id1042474385))
-- **Tailscale** — mesh VPN so both devices can reach each other on any network ([tailscale.com](https://tailscale.com))
+Best for when your phone is nearby. Free, no watermark, no time limit at 1080p.
 
-## Setup
+### Prerequisites
 
-### 1. Install mediamtx
+- **Camo Camera** — iPhone app ([App Store](https://apps.apple.com/us/app/camo-webcam-for-mac-and-pc/id1514199064))
+- **Camo Studio** — Mac desktop app ([camo.com](https://camo.com))
+- **ffmpeg** — `brew install ffmpeg`
+- **mediamtx** — `brew install mediamtx`
 
-```bash
-# macOS
-brew install mediamtx
+### Setup
 
-# Or download binary from GitHub releases for your platform
-```
+1. Open Camo Studio on your Mac and connect your iPhone (USB or Wi-Fi).
 
-### 2. Create config
+2. Create a mediamtx config:
 
 ```yaml
 # mediamtx.yml
@@ -27,37 +25,25 @@ paths:
   all_others:
 ```
 
-This accepts any incoming stream path.
-
-### 3. Install Tailscale
-
-Install on both your computer and iPhone. Sign into the same account.
-
-Get your computer's Tailscale IP:
+3. Start mediamtx:
 
 ```bash
-tailscale ip -4
-# e.g. 100.64.x.x
-```
-
-### 4. Configure Larix Broadcaster
-
-1. Open Larix → **Settings** → **Connections** → **+** → **Connection**
-2. Set URL to: `rtmp://<tailscale-ip>:1935/live/stream`
-3. Save
-
-### 5. Start streaming
-
-```bash
-# Terminal
 mediamtx mediamtx.yml
 ```
 
-Then tap the red record button in Larix.
+4. In a second terminal, pipe the Camo virtual webcam to mediamtx:
 
-## Endpoints
+```bash
+ffmpeg -f avfoundation -framerate 30 -video_size 1920x1080 -i "2:none" \
+  -c:v libx264 -preset ultrafast -tune zerolatency -f rtsp \
+  rtsp://localhost:8554/live/stream
+```
 
-Once the stream is live, access it on your computer at:
+> **Note:** The device index `2` may differ on your machine. Run `ffmpeg -f avfoundation -list_devices true -i ""` to find `Camo Camera` in the list.
+
+5. Verify: open `http://localhost:8889/live/stream/` in a browser.
+
+### Endpoints
 
 | Protocol | URL                                      | Latency |
 |----------|------------------------------------------|---------|
@@ -65,11 +51,64 @@ Once the stream is live, access it on your computer at:
 | RTSP     | `rtsp://localhost:8554/live/stream`      | ~500ms  |
 | HLS      | `http://localhost:8888/live/stream/`     | 2-6s    |
 
-Open the WebRTC URL in a browser to verify the stream is working.
+### Alternative: Python MJPEG server (no mediamtx needed)
 
-## Notes
+```python
+# pip install opencv-python flask
+import cv2
+from flask import Flask, Response
 
-- Tailscale adds negligible latency (~1-5ms LAN, depends on internet for remote)
-- Larix free tier adds a watermark after 30 min — restart the stream to reset
-- mediamtx requires no dependencies; it's a single binary
-- The `all_others` path config accepts any stream name, so you can change `live/stream` to whatever you want
+app = Flask(__name__)
+cap = cv2.VideoCapture(2)  # Camo device index
+
+def gen():
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            continue
+        _, jpg = cv2.imencode('.jpg', frame)
+        yield b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + jpg.tobytes() + b'\r\n'
+
+@app.route('/video')
+def video():
+    return Response(gen(), mimetype='multipart/x-mixed-replace; boundary=frame')
+
+app.run(host='0.0.0.0', port=8080)
+```
+
+Stream available at `http://localhost:8080/video`.
+
+---
+
+## Option B: Larix Broadcaster (remote / different networks)
+
+Best for when your phone is far from your computer. Requires Tailscale for cross-network connectivity.
+
+### Prerequisites
+
+- **Larix Broadcaster** — iPhone app ([App Store](https://apps.apple.com/us/app/larix-broadcaster/id1042474385)) — free with watermark after 30 min
+- **mediamtx** — `brew install mediamtx`
+- **Tailscale** — installed on both devices, same account ([tailscale.com](https://tailscale.com))
+
+### Setup
+
+1. Get your computer's Tailscale IP:
+
+```bash
+tailscale ip -4
+```
+
+2. Create `mediamtx.yml` and start mediamtx (same config as Option A).
+
+3. In Larix: **Settings → Connections → + → Connection**
+   - URL: `rtmp://<tailscale-ip>:1935/live/stream`
+
+4. Tap the red record button in Larix.
+
+5. Same endpoints as Option A apply.
+
+### Notes
+
+- Tailscale adds ~1-5ms latency on LAN, negligible for video streaming
+- Larix free tier watermarks after 30 min — restart the stream to reset
+- Works from anywhere with internet

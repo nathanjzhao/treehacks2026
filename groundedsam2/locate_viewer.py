@@ -162,9 +162,10 @@ def extract_colmap_points(tar_path):
 
 def compute_alignment(colmap_pts, glb_pts, n_iters=20):
     """ICP alignment from COLMAP → GLB coordinate space."""
+    rng = np.random.RandomState(42)  # deterministic for reproducible alignment
     n_align = min(10_000, len(colmap_pts))
-    colmap_sub = colmap_pts[np.random.choice(len(colmap_pts), min(n_align, len(colmap_pts)), replace=False)]
-    glb_sub = glb_pts[np.random.choice(len(glb_pts), min(50_000, len(glb_pts)), replace=False)]
+    colmap_sub = colmap_pts[rng.choice(len(colmap_pts), min(n_align, len(colmap_pts)), replace=False)]
+    glb_sub = glb_pts[rng.choice(len(glb_pts), min(50_000, len(glb_pts)), replace=False)]
 
     scale = np.std(glb_sub) / np.std(colmap_sub)
     R = np.eye(3)
@@ -203,6 +204,24 @@ def extract_video_frames_at(video_path, frame_indices, max_w=480):
             frames[fi] = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
     cap.release()
     return frames
+
+
+def load_binary_masks(video_path, frame_indices, threshold=10):
+    """Load full-resolution frames from masked_depth video and threshold to binary masks.
+
+    Returns dict of frame_idx -> binary mask (H x W bool array).
+    Non-black pixels (any channel > threshold) = object present.
+    """
+    cap = cv2.VideoCapture(str(video_path))
+    masks = {}
+    for fi in sorted(frame_indices):
+        cap.set(cv2.CAP_PROP_POS_FRAMES, fi)
+        ret, frame = cap.read()
+        if ret:
+            # Any channel above threshold = object pixel
+            masks[fi] = np.any(frame > threshold, axis=2)
+    cap.release()
+    return masks
 
 
 # ---------------------------------------------------------------------------
@@ -401,56 +420,50 @@ def main():
             pos = np.array(obj["mean_position_3d"])
             obj["mean_position_3d_aligned"] = apply_similarity(pos.reshape(1, 3), align_scale, R_align, t_align)[0].tolist()
 
-    # ---- Color map + highlight ----
-    obj_color_map = {}
-    for i, obj in enumerate(object_summary):
-        obj_color_map[obj["obj_id"]] = COLORS[i % len(COLORS)]
-
-    print("Highlighting point cloud regions for detected objects...")
-    glb_cols_highlighted = glb_cols.copy()
-    obj_point_indices = {}
-
+    # ---- Projection diagnostic ----
+    print("\nProjection verification (reprojecting 3D → pixel):")
     for obs in object_positions:
         fi = obs["frame_idx"]
         cam_idx = frame_to_cam_idx.get(fi)
         if cam_idx is None:
             continue
-
-        oid = obs["obj_id"]
         T = cam_transforms_aligned[cam_idx]
-        cam_pos = T[:3, 3]
-        R_w2c = T[:3, :3].T
+        cam_pos_dbg = T[:3, 3]
+        R_w2c_dbg = T[:3, :3].T
 
-        pts_cam = (R_w2c @ (glb_pts - cam_pos).T).T
-        in_front = pts_cam[:, 2] > 0.01
-        u = fx * pts_cam[:, 0] / pts_cam[:, 2] + px
-        v = fy * pts_cam[:, 1] / pts_cam[:, 2] + py
+        # Reproject the aligned position back to pixel
+        pos_aligned = np.array(obs.get("position_3d_aligned", [0, 0, 0]))
+        p_cam_dbg = R_w2c_dbg @ (pos_aligned - cam_pos_dbg)
+        u_dbg = fx * p_cam_dbg[0] / p_cam_dbg[2] + px
+        v_dbg = fy * p_cam_dbg[1] / p_cam_dbg[2] + py
+        expected_cx, expected_cy = obs["pixel_centroid"]
+        print(f"  Frame {fi} ({obs['label']}): "
+              f"expected=({expected_cx:.0f},{expected_cy:.0f}), "
+              f"reprojected=({u_dbg:.0f},{v_dbg:.0f}), "
+              f"z_cam={p_cam_dbg[2]:.2f}")
 
-        cx_obj, cy_obj = obs["pixel_centroid"]
-        mask_area = obs.get("mask_area", 10000)
-        mask_radius = np.sqrt(mask_area / np.pi)
+        # Draw crosshair on source frame for visual verification
+        if cam_idx in source_frames:
+            frame_rgb = source_frames[cam_idx].copy()
+            fh, fw = frame_rgb.shape[:2]
+            # Scale projected pixel to thumbnail size
+            sx, sy = fw / frame_w, fh / frame_h
+            ux, vy = int(u_dbg * sx), int(v_dbg * sy)
+            ex, ey = int(expected_cx * sx), int(expected_cy * sy)
+            # Green crosshair = reprojected, Red = expected centroid
+            r = 8
+            if 0 <= ux < fw and 0 <= vy < fh:
+                frame_rgb[max(0,vy-r):vy+r, max(0,ux-1):ux+2] = [0, 255, 0]
+                frame_rgb[max(0,vy-1):vy+2, max(0,ux-r):ux+r] = [0, 255, 0]
+            if 0 <= ex < fw and 0 <= ey < fh:
+                frame_rgb[max(0,ey-r):ey+r, max(0,ex-1):ex+2] = [255, 0, 0]
+                frame_rgb[max(0,ey-1):ey+2, max(0,ex-r):ex+r] = [255, 0, 0]
+            source_frames[cam_idx] = frame_rgb
 
-        du = (u - cx_obj) / (mask_radius * 1.1)
-        dv = (v - cy_obj) / (mask_radius * 1.1)
-        in_mask = (du**2 + dv**2) < 1.0
-
-        obj_pos = np.array(obs.get("position_3d_aligned", [0, 0, 0]))
-        obj_depth_cam = np.linalg.norm(obj_pos - cam_pos)
-        depth_ok = np.abs(pts_cam[:, 2] - obj_depth_cam) < obj_depth_cam * 0.3
-
-        valid_idx = np.where(in_front & in_mask & depth_ok)[0]
-        if len(valid_idx) > 0:
-            if oid not in obj_point_indices:
-                obj_point_indices[oid] = set()
-            obj_point_indices[oid].update(valid_idx.tolist())
-
-    for oid, idx_set in obj_point_indices.items():
-        idx_arr = np.array(list(idx_set))
-        color = obj_color_map.get(oid, (200, 200, 200))
-        color_f = np.array([c / 255.0 for c in color])
-        glb_cols_highlighted[idx_arr] = 0.3 * glb_cols[idx_arr] + 0.7 * color_f
-        label = next((o["label"] for o in object_summary if o["obj_id"] == oid), f"obj_{oid}")
-        print(f"  Highlighted {len(idx_arr)} points for {label}")
+    # ---- Color map for objects ----
+    obj_color_map = {}
+    for i, obj in enumerate(object_summary):
+        obj_color_map[obj["obj_id"]] = COLORS[i % len(COLORS)]
 
     # ---- Per-frame object data ----
     frame_to_obs = {}
@@ -477,7 +490,7 @@ def main():
     server.scene.add_point_cloud(
         "/scene/glb",
         points=glb_pts.astype(np.float32),
-        colors=glb_cols_highlighted.astype(np.float32),
+        colors=glb_cols.astype(np.float32),
         point_size=0.004,
         point_shape="rounded",
     )
@@ -694,7 +707,6 @@ def main():
     with server.gui.add_folder("Visibility"):
         show_glb = server.gui.add_checkbox("Show GLB", initial_value=True)
         show_cameras = server.gui.add_checkbox("Show cameras", initial_value=True)
-        show_highlights = server.gui.add_checkbox("Highlight objects on cloud", initial_value=True)
 
         def _redraw_glb():
             if not show_glb.value:
@@ -704,19 +716,14 @@ def main():
                     point_size=0.0, point_shape="rounded",
                 )
                 return
-            cols = glb_cols_highlighted if show_highlights.value else glb_cols
             server.scene.add_point_cloud(
                 "/scene/glb", points=glb_pts.astype(np.float32),
-                colors=cols.astype(np.float32),
+                colors=glb_cols.astype(np.float32),
                 point_size=0.004, point_shape="rounded",
             )
 
         @show_glb.on_update
         def _toggle_glb(event):
-            _redraw_glb()
-
-        @show_highlights.on_update
-        def _toggle_highlights(event):
             _redraw_glb()
 
         @show_cameras.on_update
