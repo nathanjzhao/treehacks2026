@@ -17,12 +17,14 @@ import numpy as np
 from datetime import datetime
 import os
 import sys
+import socket
 
 app = Flask(__name__)
 
 # Configuration
 FRAMES_DIR = 'frames'
-DISPLAY_FRAMES = False  # Set to True to display frames in window (requires X11)
+# Set to True to display frames in window (requires X11)
+DISPLAY_FRAMES = False
 
 # Statistics
 frame_count = 0
@@ -30,6 +32,7 @@ start_time = datetime.utcnow()
 
 # Create frames directory
 os.makedirs(FRAMES_DIR, exist_ok=True)
+
 
 @app.route('/frame', methods=['POST'])
 def receive_frame():
@@ -101,6 +104,7 @@ def receive_frame():
         print(f"❌ Error processing frame: {e}", file=sys.stderr)
         return jsonify({'error': str(e)}), 500
 
+
 @app.route('/status', methods=['GET'])
 def status():
     """Health check endpoint"""
@@ -115,6 +119,7 @@ def status():
         'frames_directory': FRAMES_DIR
     })
 
+
 @app.route('/stats', methods=['GET'])
 def stats():
     """Detailed statistics endpoint"""
@@ -122,7 +127,8 @@ def stats():
     fps = frame_count / elapsed if elapsed > 0 else 0
 
     # Count saved frames
-    saved_frames = len([f for f in os.listdir(FRAMES_DIR) if f.endswith('.jpg')])
+    saved_frames = len(
+        [f for f in os.listdir(FRAMES_DIR) if f.endswith('.jpg')])
 
     return jsonify({
         'status': 'running',
@@ -133,6 +139,7 @@ def stats():
         'frames_directory': os.path.abspath(FRAMES_DIR),
         'display_enabled': DISPLAY_FRAMES
     })
+
 
 @app.route('/clear', methods=['POST'])
 def clear_frames():
@@ -151,12 +158,13 @@ def clear_frames():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
-def print_banner():
+
+def print_banner(port: int):
     """Print startup banner"""
     print("=" * 60)
     print("🚀 Ray-Ban Meta Glasses - Video Frame Receiver")
     print("=" * 60)
-    print(f"📡 Listening on: http://0.0.0.0:8080")
+    print(f"📡 Listening on: http://0.0.0.0:{port}")
     print(f"💾 Frames directory: {os.path.abspath(FRAMES_DIR)}")
     print(f"🖼️  Display frames: {DISPLAY_FRAMES}")
     print("")
@@ -167,28 +175,49 @@ def print_banner():
     print("  POST /clear   - Clear saved frames")
     print("")
     print("Phone Hotspot IPs:")
-    print("  iOS:     172.20.10.1:8080")
-    print("  Android: 192.168.43.1:8080")
+    print(f"  iOS:     172.20.10.1:{port}")
+    print(f"  Android: 192.168.43.1:{port}")
     print("")
     print("Configure Android app:")
     print("  1. Enable phone hotspot")
     print("  2. Connect laptop to hotspot")
     print("  3. In app: Settings → Computer Streaming")
-    print("  4. IP: 172.20.10.1, Port: 8080")
+    print(f"  4. IP: 172.20.10.1, Port: {port}")
     print("  5. Enable streaming")
     print("")
     print("Press Ctrl+C to stop")
     print("=" * 60)
     print("")
 
+
+_find_available_port = None
+
+
+def _find_available_port(start: int, max_tries: int = 10, host: str = '0.0.0.0') -> int:
+    for port in range(start, start + max_tries):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            try:
+                s.bind((host, port))
+                return port
+            except OSError:
+                continue
+    raise RuntimeError(
+        f'No available port in range {start}-{start + max_tries - 1}')
+
+
 if __name__ == '__main__':
-    print_banner()
+    # pick a port (try next ports if 8080 is occupied)
+    chosen_port = _find_available_port(8080, max_tries=10)
+    if chosen_port != 8080:
+        print(f"Port 8080 is in use — using {chosen_port} instead")
+
+    print_banner(chosen_port)
 
     try:
         # Run Flask app
         app.run(
             host='0.0.0.0',
-            port=8080,
+            port=chosen_port,
             threaded=True,
             debug=False
         )
