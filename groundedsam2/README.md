@@ -82,15 +82,29 @@ Outputs `{stem}_objects3d.json` to `data/groundedsam2/` with per-object 3D posit
 
 ### 3D Viewer
 
-Viser-based viewer showing GLB point cloud + detected objects as labeled spheres + camera trajectory:
+Viser-based viewer with smooth camera path playback, object highlighting on the point cloud, and video panels (source, segmentation, depth):
 
 ```bash
 python groundedsam2/locate_viewer.py \
   data/mapanything/IMG_4720.glb \
   data/groundedsam2/IMG_4730_objects3d.json \
-  --reference hloc_localization/data/hloc_reference/IMG_4720/reference.tar.gz
+  --reference hloc_localization/data/hloc_reference/IMG_4720/reference.tar.gz \
+  --video data/IMG_4730.MOV \
+  --results-dir data/groundedsam2/
 # Open http://localhost:8890
 ```
+
+Features:
+- **Smooth camera path** — SLERP-interpolated between keyframes, play/pause with speed control
+- **Object highlighting** — projects SAM masks into the GLB point cloud to color object surfaces
+- **Video panels** — auto-loads source, tracked (`_tracked.mp4`), composite depth (`_composite.mp4`), and masked depth (`_masked_depth.mp4`) from `--results-dir`
+- **Per-object toggles** — show/hide individual objects, toggle point cloud highlights
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--video` | none | Source `.MOV` to show camera frames |
+| `--results-dir` | same as JSON | Dir with tracked/depth videos to auto-load |
+| `--interp-steps` | `20` | Smooth interpolation steps between camera keyframes |
 
 ## Pipeline
 
