@@ -69,6 +69,25 @@ const TOOLS = [
       },
     },
   },
+  {
+    type: "function" as const,
+    function: {
+      name: "search_medical_info",
+      description:
+        "Search for current medical information online using Perplexity. Use this when the resident asks about medication side effects, drug interactions, general health questions, symptoms, recent medical guidelines, or anything requiring current medical knowledge that isn't available in their patient record. Do NOT use this for finding physical objects or emergencies.",
+      parameters: {
+        type: "object",
+        properties: {
+          query: {
+            type: "string",
+            description:
+              "The medical question to research, contextualized with relevant patient details (age, conditions) but without personally identifying information",
+          },
+        },
+        required: ["query"],
+      },
+    },
+  },
 ];
 
 // ────────────────────────────────────────────────────────────────
@@ -113,6 +132,84 @@ function minimizeForLLM(card: PatientCardShape): string {
     null,
     2
   );
+}
+
+// ────────────────────────────────────────────────────────────────
+// Perplexity Sonar (web search for medical info)
+// ────────────────────────────────────────────────────────────────
+
+interface SonarResult {
+  answer: string;
+  citations: Array<{ title?: string; url: string }>;
+}
+
+async function callSonar(
+  query: string,
+  patientCard: PatientCardShape
+): Promise<SonarResult> {
+  const apiKey = process.env.OPENROUTER_API_KEY;
+  if (!apiKey) throw new Error("OPENROUTER_API_KEY not configured");
+
+  // Contextualize with de-identified patient info
+  const contextParts = [
+    patientCard.demographics?.age_range
+      ? `Patient: ${patientCard.demographics.age_range} year old`
+      : "",
+    patientCard.demographics?.sex || "",
+    patientCard.conditions?.length
+      ? `Conditions: ${patientCard.conditions.map((c) => c.name).join(", ")}`
+      : "",
+    patientCard.meds?.length
+      ? `Current medications: ${patientCard.meds.map((m) => m.name).join(", ")}`
+      : "",
+  ]
+    .filter(Boolean)
+    .join(". ");
+
+  const fullQuery = contextParts ? `${contextParts}. Question: ${query}` : query;
+
+  const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+      "HTTP-Referer":
+        process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000",
+      "X-Title": "Mira",
+    },
+    body: JSON.stringify({
+      model: "perplexity/sonar",
+      messages: [
+        {
+          role: "system",
+          content:
+            "You are a medical information assistant for an assisted living facility. Provide accurate, evidence-based medical information. Keep answers concise (2-4 sentences). Always note that this is general information and the patient should consult their healthcare provider for personalized advice.",
+        },
+        { role: "user", content: fullQuery },
+      ],
+      temperature: 0.3,
+      max_tokens: 500,
+    }),
+  });
+
+  if (!res.ok) {
+    const errText = await res.text();
+    console.error("[Sonar] Error:", res.status, errText);
+    throw new Error(`Sonar API error: ${res.status}`);
+  }
+
+  const data = await res.json();
+  const choice = data.choices?.[0];
+  const answer = choice?.message?.content || "No results found.";
+
+  // Sonar returns citations in the top-level response
+  const rawCitations = data.citations || [];
+  const citations: Array<{ title?: string; url: string }> = rawCitations.map(
+    (c: string | { url: string; title?: string }) =>
+      typeof c === "string" ? { url: c } : c
+  );
+
+  return { answer, citations };
 }
 
 // ────────────────────────────────────────────────────────────────
@@ -244,6 +341,75 @@ async function callLLM(
 }
 
 // ────────────────────────────────────────────────────────────────
+// Streaming LLM call (token-by-token)
+// ────────────────────────────────────────────────────────────────
+
+async function callLLMStreaming(
+  messages: Array<Record<string, any>>,
+  onChunk: (text: string) => void
+): Promise<string> {
+  const apiKey = process.env.OPENROUTER_API_KEY;
+  if (!apiKey) throw new Error("OPENROUTER_API_KEY not configured");
+
+  const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+      "HTTP-Referer":
+        process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000",
+      "X-Title": "Mira",
+    },
+    body: JSON.stringify({
+      model: "openai/gpt-4o-mini",
+      messages,
+      temperature: 0.5,
+      max_tokens: 400,
+      stream: true,
+    }),
+  });
+
+  if (!res.ok) {
+    const errText = await res.text();
+    console.error("[OpenRouter Stream] Error:", res.status, errText);
+    throw new Error(`OpenRouter API error: ${res.status}`);
+  }
+
+  const reader = res.body!.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let fullReply = "";
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split("\n");
+    buffer = lines.pop() || "";
+
+    for (const line of lines) {
+      if (!line.startsWith("data: ")) continue;
+      const data = line.slice(6).trim();
+      if (data === "[DONE]") continue;
+
+      try {
+        const parsed = JSON.parse(data);
+        const delta = parsed.choices?.[0]?.delta?.content;
+        if (delta) {
+          fullReply += delta;
+          onChunk(delta);
+        }
+      } catch {
+        // skip malformed chunk
+      }
+    }
+  }
+
+  return fullReply;
+}
+
+// ────────────────────────────────────────────────────────────────
 // Tool execution
 // ────────────────────────────────────────────────────────────────
 
@@ -361,6 +527,47 @@ async function executeTool(
       };
     }
 
+    case "search_medical_info": {
+      const query = args.query;
+
+      try {
+        const sonarResult = await callSonar(query, patientCard);
+
+        await appendEvent({
+          patient_id,
+          type: "WEB_SEARCH_COMPLETED",
+          severity: "GREEN",
+          receipt_text: `Researched: ${query}`,
+          payload: {
+            query,
+            citations: sonarResult.citations,
+            source_model: "perplexity/sonar",
+          },
+          source: "backend",
+        });
+
+        return {
+          action: "ANSWER",
+          toolOutput: JSON.stringify({
+            answer: sonarResult.answer,
+            citations: sonarResult.citations,
+            disclaimer:
+              "This is general medical information. Always consult your healthcare provider.",
+          }),
+        };
+      } catch (err) {
+        console.error("[Sonar] Search failed:", err);
+        return {
+          action: "ANSWER",
+          toolOutput: JSON.stringify({
+            error: "Web search temporarily unavailable",
+            fallback:
+              "I couldn't look that up right now. Please ask your caregiver for detailed medical information.",
+          }),
+        };
+      }
+    }
+
     default:
       return { action: "ANSWER", toolOutput: "Unknown tool called." };
   }
@@ -409,6 +616,11 @@ function toolLabel(name: string, args: Record<string, any>): {
       return {
         label: "Looking up medication",
         searches: [args.medication_query || "medication"],
+      };
+    case "search_medical_info":
+      return {
+        label: "Researching online",
+        searches: [args.query || "medical info"],
       };
     default:
       return { label: name };
@@ -528,6 +740,7 @@ export async function POST(request: NextRequest) {
         let action: "FIND_OBJECT" | "ESCALATE" | "ANSWER" = "ANSWER";
         let request_id: string | undefined;
         let object_name: string | undefined;
+        let citations: Array<{ title?: string; url: string }> = [];
 
         try {
           // Step: Thinking
@@ -562,6 +775,16 @@ export async function POST(request: NextRequest) {
               object_name = findResult?.object_name;
             }
 
+            // Collect citations from Sonar results
+            for (let ti = 0; ti < firstResponse.toolCalls.length; ti++) {
+              if (firstResponse.toolCalls[ti].function.name === "search_medical_info") {
+                try {
+                  const parsed = JSON.parse(toolResults[ti].toolOutput);
+                  if (parsed.citations) citations = parsed.citations;
+                } catch { /* ignore */ }
+              }
+            }
+
             // Step: Composing response
             const composeIdx = stepIndex;
             emitStep("Composing response", "active");
@@ -576,15 +799,24 @@ export async function POST(request: NextRequest) {
               })),
             ];
 
-            const secondResponse = await callLLM(followUpMessages, false);
-            reply =
-              secondResponse.reply ||
-              firstResponse.reply ||
-              "I've taken care of that for you.";
+            reply = await callLLMStreaming(followUpMessages, (chunk) => {
+              send({ type: "text", chunk });
+            });
+            if (!reply) {
+              reply = firstResponse.reply || "I've taken care of that for you.";
+            }
 
             markDone(composeIdx);
           } else {
+            // No tools — emit the reply as text chunks for streaming effect
             reply = firstResponse.reply;
+            if (reply) {
+              // Split into small chunks for visual streaming
+              const words = reply.split(/(\s+)/);
+              for (const word of words) {
+                if (word) send({ type: "text", chunk: word });
+              }
+            }
           }
 
           if (!reply) {
@@ -606,6 +838,7 @@ export async function POST(request: NextRequest) {
             linked_user_event_id: userEvent.id,
             ...(object_name ? { object_name } : {}),
             ...(request_id ? { request_id } : {}),
+            ...(citations.length > 0 ? { citations } : {}),
           },
           source: "backend",
         });
@@ -618,6 +851,7 @@ export async function POST(request: NextRequest) {
           action,
           ...(request_id ? { request_id } : {}),
           ...(object_name ? { object_name } : {}),
+          ...(citations.length > 0 ? { citations } : {}),
           event_id: assistantEvent.id,
         });
       } catch (error) {
