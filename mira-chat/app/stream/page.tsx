@@ -878,8 +878,8 @@ export default function StreamPage() {
           onClick={() => { setLiveMode((p) => !p); setMessages([]); setProcessing(null); }}
           style={{
             marginTop: 10,
-            padding: "4px 12px",
-            fontSize: 10,
+            padding: "8px 20px",
+            fontSize: 13,
             fontFamily: "'DM Mono', monospace",
             fontWeight: 600,
             letterSpacing: "0.05em",
@@ -897,8 +897,8 @@ export default function StreamPage() {
           onClick={() => setYoloEnabled((p) => !p)}
           style={{
             marginTop: 6,
-            padding: "4px 12px",
-            fontSize: 10,
+            padding: "8px 20px",
+            fontSize: 13,
             fontFamily: "'DM Mono', monospace",
             fontWeight: 600,
             letterSpacing: "0.05em",
