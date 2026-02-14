@@ -1,0 +1,8 @@
+numpy
+trimesh
+viser
+fastapi
+uvicorn[standard]
+jinja2
+httpx
+Pillow
