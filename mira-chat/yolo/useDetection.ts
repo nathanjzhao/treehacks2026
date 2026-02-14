@@ -46,12 +46,20 @@ export function useDetection(
       try {
         const ort = await import("onnxruntime-web");
 
-        // Use WASM backend (works everywhere)
+        // Try WebGL first (GPU-accelerated), fall back to WASM
         ort.env.wasm.numThreads = 1;
 
-        const session = await ort.InferenceSession.create(MODEL_URL, {
-          executionProviders: ["wasm"],
-        });
+        let session;
+        try {
+          session = await ort.InferenceSession.create(MODEL_URL, {
+            executionProviders: ["webgl"],
+          });
+        } catch {
+          // WebGL not available — fall back to WASM
+          session = await ort.InferenceSession.create(MODEL_URL, {
+            executionProviders: ["wasm"],
+          });
+        }
 
         if (!cancelled) {
           sessionRef.current = session;
