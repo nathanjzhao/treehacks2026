@@ -16,11 +16,11 @@ package com.meta.wearable.dat.externalsampleapps.cameraaccess.streaming
 import kotlinx.serialization.Serializable
 
 /**
- * Computer endpoint configuration for direct IP streaming via phone hotspot
+ * Computer endpoint configuration for direct IP streaming via Tailscale VPN
  */
 @Serializable
 data class ComputerEndpoint(
-    val ip: String = "172.20.10.1", // Default iOS hotspot gateway IP
+    val ip: String = "100.93.34.56", // Default: Tailscale computer IP
     val port: Int = 8080,
     val enabled: Boolean = false
 )

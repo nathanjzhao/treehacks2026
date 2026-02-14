@@ -260,7 +260,7 @@ class StreamViewModel(
             frameData = byteArray,
             width = videoFrame.width,
             height = videoFrame.height,
-            timestamp = videoFrame.presentationTimestamp
+            timestamp = System.currentTimeMillis()
         )
       }
     }

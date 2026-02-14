@@ -18,6 +18,7 @@ package com.meta.wearable.dat.externalsampleapps.cameraaccess.streaming
 
 import android.app.Application
 import kotlinx.coroutines.*
+import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.*
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
@@ -175,6 +176,7 @@ class VideoStreamingManager(
         // Start collection with sampling
         cloudJob = coroutineScope.launch(Dispatchers.IO) {
             try {
+                @OptIn(kotlinx.coroutines.FlowPreview::class)
                 cloudFrameFlow
                     .sample(5000L) // Sample every 5 seconds
                     .collect { frameData ->
