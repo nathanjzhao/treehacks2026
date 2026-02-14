@@ -345,8 +345,10 @@ def main():
     # GUI
     with server.gui.add_folder("Playback"):
         frame_slider = server.gui.add_slider("Frame", min=0, max=len(POSES)-1, step=1, initial_value=0)
-        play_btn = server.gui.add_button("Play")
+        play_btn = server.gui.add_button("Play", icon=viser.Icon.PLAYER_PLAY)
+        pause_btn = server.gui.add_button("Pause", icon=viser.Icon.PLAYER_PAUSE, visible=False)
         speed_slider = server.gui.add_slider("Speed (s/frame)", min=0.1, max=2.0, step=0.1, initial_value=0.5)
+        follow_cam = server.gui.add_checkbox("Follow camera", initial_value=True)
 
     with server.gui.add_folder("Visibility"):
         show_colmap = server.gui.add_checkbox("Show COLMAP points", initial_value=True)
@@ -365,24 +367,99 @@ def main():
 
     playing = [False]
 
-    @frame_slider.on_update
-    def _on_frame(event):
-        i = frame_slider.value
+    def set_frame(i, animate_camera=True):
+        """Update active frustum and optionally move client cameras to this pose."""
         T = cam_transforms_aligned[i]
         wxyz = vtf.SO3.from_matrix(T[:3, :3]).wxyz
         pos = T[:3, 3]
+
+        # Update the green frustum marker
         active_frustum.wxyz = wxyz
         active_frustum.position = pos
+
         info_text.content = (
-            f"**Frame {i}** | "
+            f"**Frame {i}/{len(POSES)-1}** | "
             f"Pos: ({pos[0]:.2f}, {pos[1]:.2f}, {pos[2]:.2f}) | "
             f"Inliers: {POSES[i]['inliers']}"
         )
 
+        # Animate all connected clients' cameras to follow the pose
+        if animate_camera and follow_cam.value:
+            # Place camera slightly behind the frustum so you see it from that viewpoint
+            R_cam = T[:3, :3]
+            cam_back = pos - R_cam @ np.array([0.0, 0.0, 0.3])  # pull back a bit
+            look_target = pos + R_cam @ np.array([0.0, 0.0, 0.5])  # look forward
+
+            for client in server.get_clients().values():
+                with client.atomic():
+                    client.camera.position = cam_back
+                    client.camera.look_at = look_target
+                    client.camera.up_direction = R_cam @ np.array([0.0, -1.0, 0.0])
+
+    def smooth_transition(i_from, i_to, steps=15):
+        """Smoothly interpolate client cameras between two frames."""
+        if not follow_cam.value:
+            set_frame(i_to, animate_camera=False)
+            return
+
+        T_from = cam_transforms_aligned[i_from]
+        T_to = cam_transforms_aligned[i_to]
+
+        SE3_from = vtf.SE3.from_rotation_and_translation(
+            vtf.SO3.from_matrix(T_from[:3, :3]),
+            T_from[:3, 3],
+        )
+        SE3_to = vtf.SE3.from_rotation_and_translation(
+            vtf.SO3.from_matrix(T_to[:3, :3]),
+            T_to[:3, 3],
+        )
+
+        SE3_delta = SE3_from.inverse() @ SE3_to
+
+        for step in range(steps + 1):
+            alpha = step / steps
+            SE3_interp = SE3_from @ vtf.SE3.exp(SE3_delta.log() * alpha)
+
+            R_interp = SE3_interp.rotation().as_matrix()
+            pos_interp = SE3_interp.translation()
+
+            cam_back = pos_interp - R_interp @ np.array([0.0, 0.0, 0.3])
+            look_target = pos_interp + R_interp @ np.array([0.0, 0.0, 0.5])
+
+            # Update frustum at final step
+            if step == steps:
+                active_frustum.wxyz = SE3_interp.rotation().wxyz
+                active_frustum.position = pos_interp
+                info_text.content = (
+                    f"**Frame {i_to}/{len(POSES)-1}** | "
+                    f"Pos: ({pos_interp[0]:.2f}, {pos_interp[1]:.2f}, {pos_interp[2]:.2f}) | "
+                    f"Inliers: {POSES[i_to]['inliers']}"
+                )
+
+            for client in server.get_clients().values():
+                with client.atomic():
+                    client.camera.position = cam_back
+                    client.camera.look_at = look_target
+                    client.camera.up_direction = R_interp @ np.array([0.0, -1.0, 0.0])
+                client.flush()
+
+            time.sleep(speed_slider.value / steps)
+
+    @frame_slider.on_update
+    def _on_frame(event):
+        set_frame(frame_slider.value, animate_camera=True)
+
     @play_btn.on_click
     def _on_play(event):
-        playing[0] = not playing[0]
-        play_btn.name = "Pause" if playing[0] else "Play"
+        playing[0] = True
+        play_btn.visible = False
+        pause_btn.visible = True
+
+    @pause_btn.on_click
+    def _on_pause(event):
+        playing[0] = False
+        pause_btn.visible = False
+        play_btn.visible = True
 
     @show_colmap.on_update
     def _toggle_colmap(event):
@@ -404,16 +481,17 @@ def main():
             point_shape="rounded",
         )
 
-    _on_frame(None)
+    set_frame(0, animate_camera=False)
 
     print("Ready! Open http://localhost:8890")
-    print("Use slider or Play button to animate camera through scene.")
+    print("Controls: Play/Pause, frame slider, follow camera toggle.")
 
     while True:
         if playing[0]:
-            i = (frame_slider.value + 1) % len(POSES)
-            frame_slider.value = i
-            time.sleep(speed_slider.value)
+            i_current = frame_slider.value
+            i_next = (i_current + 1) % len(POSES)
+            frame_slider.value = i_next
+            smooth_transition(i_current, i_next)
         else:
             time.sleep(0.1)
 
