@@ -40,8 +40,8 @@ data class CloudEndpoint(
  */
 @Serializable
 data class StreamingSettings(
-    val computerTargetFps: Int = 7, // 5-10 FPS range for 3D reconstruction
-    val jpegQuality: Int = 70, // 50-90% JPEG compression quality
+    val computerTargetFps: Int = 7, // 1-30 FPS range for 3D reconstruction
+    val jpegQuality: Int = 70, // 25-100% JPEG compression quality
     val cloudCaptureIntervalMs: Long = 5000 // Capture every 5 seconds for cloud
 )
 

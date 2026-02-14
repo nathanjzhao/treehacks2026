@@ -229,8 +229,8 @@ fun StreamingSettingsScreen(
                     Slider(
                         value = targetFps,
                         onValueChange = { targetFps = it },
-                        valueRange = 2f..10f,
-                        steps = 7,
+                        valueRange = 1f..30f,
+                        steps = 28,
                         modifier = Modifier.fillMaxWidth()
                     )
                     Text(
@@ -248,8 +248,8 @@ fun StreamingSettingsScreen(
                     Slider(
                         value = jpegQuality,
                         onValueChange = { jpegQuality = it },
-                        valueRange = 50f..90f,
-                        steps = 7,
+                        valueRange = 25f..100f,
+                        steps = 74,
                         modifier = Modifier.fillMaxWidth()
                     )
                     Text(
@@ -257,6 +257,20 @@ fun StreamingSettingsScreen(
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
+
+                    Button(
+                        onClick = {
+                            scope.launch {
+                                streamViewModel.updateQualitySettings(
+                                    targetFps.toInt(),
+                                    jpegQuality.toInt()
+                                )
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("Save Quality Settings")
+                    }
                 }
             }
 

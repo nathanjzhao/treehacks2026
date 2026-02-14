@@ -408,6 +408,15 @@ class StreamViewModel(
     )
   }
 
+  suspend fun updateQualitySettings(targetFps: Int, jpegQuality: Int) {
+    streamingPreferences.updateSettings(
+        _uiState.value.streamingConfiguration.settings.copy(
+            computerTargetFps = targetFps,
+            jpegQuality = jpegQuality
+        )
+    )
+  }
+
   fun getStreamingStats(): StateFlow<com.meta.wearable.dat.externalsampleapps.cameraaccess.streaming.StreamingStats> {
     return videoStreamingManager.statistics
   }
