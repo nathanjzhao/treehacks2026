@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import { supabase, MiraEvent } from "@/lib/supabase/client";
+import { useDetection, DetectionOverlay } from "@/yolo";
 
 /* ================================================================
    ACTION CHAINS — scripted demos for hackathon presentation
@@ -461,6 +462,20 @@ export default function StreamPage() {
   const chatEndRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const pidRef = useRef(0);
+  const [yoloEnabled, setYoloEnabled] = useState(true);
+  const [viewSize, setViewSize] = useState({ w: 1920, h: 1080 });
+
+  // YOLO object detection on video feed
+  const { detections, inferenceMs, modelLoaded, modelError } = useDetection(videoRef, {
+    enabled: yoloEnabled && videoReady,
+  });
+
+  useEffect(() => {
+    const update = () => setViewSize({ w: window.innerWidth, h: window.innerHeight });
+    update();
+    window.addEventListener("resize", update);
+    return () => window.removeEventListener("resize", update);
+  }, []);
 
   useEffect(() => {
     setClock(new Date());
@@ -779,6 +794,17 @@ export default function StreamPage() {
         <div style={{ position: "absolute", inset: 0, opacity: 0.03, backgroundImage: "linear-gradient(rgba(120,255,200,0.3) 1px, transparent 1px), linear-gradient(90deg, rgba(120,255,200,0.3) 1px, transparent 1px)", backgroundSize: "60px 60px", animation: "hud-grid-pulse 4s ease-in-out infinite" }} />
         {/* Film grain */}
         <div style={{ position: "absolute", inset: 0, opacity: 0.08, mixBlendMode: "overlay", background: "url(\"data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E\")" }} />
+        {/* YOLO detection overlay */}
+        {videoReady && videoRef.current && (
+          <DetectionOverlay
+            detections={detections}
+            videoWidth={videoRef.current.videoWidth || 1920}
+            videoHeight={videoRef.current.videoHeight || 1080}
+            canvasWidth={viewSize.w}
+            canvasHeight={viewSize.h}
+            inferenceMs={inferenceMs}
+          />
+        )}
       </div>
 
       <EscalationToast visible={showEscalation} />
@@ -852,8 +878,8 @@ export default function StreamPage() {
           onClick={() => { setLiveMode((p) => !p); setMessages([]); setProcessing(null); }}
           style={{
             marginTop: 10,
-            padding: "4px 12px",
-            fontSize: 10,
+            padding: "8px 20px",
+            fontSize: 13,
             fontFamily: "'DM Mono', monospace",
             fontWeight: 600,
             letterSpacing: "0.05em",
@@ -867,6 +893,35 @@ export default function StreamPage() {
         >
           {liveMode ? "● LIVE" : "○ DEMO"}
         </button>
+        <button
+          onClick={() => setYoloEnabled((p) => !p)}
+          style={{
+            marginTop: 6,
+            padding: "8px 20px",
+            fontSize: 13,
+            fontFamily: "'DM Mono', monospace",
+            fontWeight: 600,
+            letterSpacing: "0.05em",
+            color: yoloEnabled ? "rgba(120,255,200,0.9)" : "rgba(255,255,255,0.4)",
+            background: yoloEnabled ? "rgba(120,255,200,0.1)" : "rgba(255,255,255,0.05)",
+            border: `1px solid ${yoloEnabled ? "rgba(120,255,200,0.3)" : "rgba(255,255,255,0.1)"}`,
+            borderRadius: 6,
+            cursor: "pointer",
+            transition: "all 0.2s",
+          }}
+        >
+          {yoloEnabled ? "◉ YOLO" : "○ YOLO"}
+        </button>
+        {modelLoaded && (
+          <div style={{ marginTop: 4, fontSize: 9, fontFamily: "'DM Mono', monospace", color: "rgba(120,255,200,0.4)" }}>
+            YOLOv8n · {detections.length} obj · {inferenceMs}ms
+          </div>
+        )}
+        {modelError && (
+          <div style={{ marginTop: 4, fontSize: 9, fontFamily: "'DM Mono', monospace", color: "rgba(255,150,100,0.6)" }}>
+            YOLO: {modelError.slice(0, 30)}
+          </div>
+        )}
       </div>
 
       {/* ──── CHAT OVERLAY ──── */}
