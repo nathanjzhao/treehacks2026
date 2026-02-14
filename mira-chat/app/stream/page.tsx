@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef, useCallback } from "react";
-import { consumeChatSSE } from "@/lib/sse-parser";
+import { supabase, MiraEvent } from "@/lib/supabase/client";
 
 /* ================================================================
    ACTION CHAINS — scripted demos for hackathon presentation
@@ -139,6 +139,7 @@ function StepIcon({ type, done, active }: { type: string; done: boolean; active:
     phone: <path d="M22 16.92v3a2 2 0 01-2.18 2 19.79 19.79 0 01-8.63-3.07 19.5 19.5 0 01-6-6A19.79 19.79 0 012.12 4.18 2 2 0 014.11 2h3a2 2 0 012 1.72c.127.96.361 1.903.7 2.81a2 2 0 01-.45 2.11L8.09 9.91a16 16 0 006 6l1.27-1.27a2 2 0 012.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0122 16.92z" stroke={c} strokeWidth="1.8" fill="none" />,
     shield: <><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" stroke={c} strokeWidth="1.8" fill="none" /><path d="M9 12l2 2 4-4" stroke={c} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" fill="none" /></>,
     check: <><circle cx="12" cy="12" r="10" stroke={c} strokeWidth="1.8" fill="none" /><path d="M9 12l2 2 4-4" stroke={c} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></>,
+    globe: <><circle cx="12" cy="12" r="10" stroke={c} strokeWidth="1.8" fill="none" /><path d="M2 12h20M12 2a15.3 15.3 0 014 10 15.3 15.3 0 01-4 10 15.3 15.3 0 01-4-10 15.3 15.3 0 014-10z" stroke={c} strokeWidth="1.8" fill="none" /></>,
   };
   return (
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
@@ -179,10 +180,10 @@ function HudStepper({
     <div
       className="hud-fadein"
       style={{
-        background: "rgba(0,0,0,0.5)",
-        backdropFilter: "blur(20px)",
-        WebkitBackdropFilter: "blur(20px)",
-        border: "1px solid rgba(120,255,200,0.12)",
+        background: "rgba(0,0,0,0.6)",
+        backdropFilter: "blur(24px)",
+        WebkitBackdropFilter: "blur(24px)",
+        border: "1px solid rgba(120,255,200,0.15)",
         borderRadius: 14,
         overflow: "hidden",
       }}
@@ -292,9 +293,10 @@ function HudStepper({
                       <StepIcon type={step.icon} done={done} active={active} />
                       <span
                         style={{
-                          fontSize: 12,
+                          fontSize: 13,
                           fontWeight: active ? 600 : 400,
-                          color: done ? "rgba(120,255,200,0.85)" : active ? "rgba(255,255,255,0.9)" : "rgba(255,255,255,0.25)",
+                          color: done ? "rgba(120,255,200,0.9)" : active ? "rgba(255,255,255,0.95)" : "rgba(255,255,255,0.25)",
+                          textShadow: "0 1px 2px rgba(0,0,0,0.4)",
                         }}
                       >
                         {step.label}
@@ -423,6 +425,7 @@ interface AssistantMsg extends MsgBase {
   location?: string;
   confidence?: number;
   coords?: { x: number; y: number; z: number };
+  citations?: Array<{ title?: string; url: string }>;
 }
 type Msg = UserMsg | ThinkingMsg | AssistantMsg;
 
@@ -435,6 +438,7 @@ const DEMO_PATIENT_ID = "a1b2c3d4-0001-4000-8000-000000000001";
 function mapStepToIcon(label: string): string {
   const l = label.toLowerCase();
   if (l.includes("interpret")) return "brain";
+  if (l.includes("researching online") || l.includes("perplexity") || l.includes("sonar")) return "globe";
   if (l.includes("health record") || l.includes("recalling") || l.includes("looking up") || l.includes("researching")) return "search";
   if (l.includes("thinking") || l.includes("analyzing")) return "brain";
   if (l.includes("searching for")) return "camera";
@@ -500,6 +504,76 @@ export default function StreamPage() {
     };
   }, []);
 
+  // Supabase realtime — mirror device chat in live mode
+  useEffect(() => {
+    if (!liveMode) return;
+
+    // Load recent chat events on entering live mode
+    (async () => {
+      const { data } = await supabase
+        .from("events")
+        .select("*")
+        .eq("patient_id", DEMO_PATIENT_ID)
+        .in("type", ["CHAT_USER_UTTERANCE", "CHAT_ASSISTANT_RESPONSE"])
+        .order("created_at", { ascending: false })
+        .limit(20);
+
+      if (data && data.length > 0) {
+        const msgs: Msg[] = (data as MiraEvent[]).reverse().map((ev) => {
+          if (ev.type === "CHAT_USER_UTTERANCE") {
+            return { role: "user" as const, text: ev.receipt_text || "...", time: new Date(ev.created_at) };
+          }
+          const payload = ev.payload as Record<string, unknown> | undefined;
+          return {
+            role: "assistant" as const,
+            text: ev.receipt_text || "...",
+            type: payload?.action === "ESCALATE" ? "escalation" : payload?.action === "FIND_OBJECT" ? "object_found" : "info",
+            citations: payload?.citations as AssistantMsg["citations"],
+            time: new Date(ev.created_at),
+          };
+        });
+        setMessages(msgs);
+      }
+    })();
+
+    // Subscribe for new events
+    const channel = supabase
+      .channel("stream-mirror")
+      .on(
+        "postgres_changes",
+        {
+          event: "INSERT",
+          schema: "public",
+          table: "events",
+          filter: `patient_id=eq.${DEMO_PATIENT_ID}`,
+        },
+        (payload) => {
+          const ev = payload.new as MiraEvent;
+          if (ev.type === "CHAT_USER_UTTERANCE") {
+            setMessages((p) => [...p, { role: "user", text: ev.receipt_text || "...", time: new Date(ev.created_at) }]);
+          } else if (ev.type === "CHAT_ASSISTANT_RESPONSE") {
+            const pl = ev.payload as Record<string, unknown> | undefined;
+            setMessages((p) => [...p, {
+              role: "assistant",
+              text: ev.receipt_text || "...",
+              type: pl?.action === "ESCALATE" ? "escalation" : pl?.action === "FIND_OBJECT" ? "object_found" : "info",
+              citations: pl?.citations as AssistantMsg["citations"],
+              time: new Date(ev.created_at),
+            }]);
+            if (pl?.action === "ESCALATE") {
+              setShowEscalation(true);
+              setTimeout(() => setShowEscalation(false), 4000);
+            }
+          }
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [liveMode]);
+
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, processing]);
@@ -554,81 +628,10 @@ export default function StreamPage() {
     advance();
   }, []);
 
-  const sendLive = useCallback((text: string) => {
-    const mid = ++pidRef.current;
-    setMessages((p) => [...p, { role: "user", text: text.trim(), time: new Date() }]);
-    setInput("");
-
-    const liveSteps: Step[] = [];
-    setProcessing({ id: mid, steps: liveSteps, currentStep: 0, chain: { steps: liveSteps, reply: "", type: "thinking" }, finished: false });
-    setExpandedSteppers((p) => ({ ...p, [mid]: true }));
-
-    let replyBuffer = "";
-
-    consumeChatSSE(DEMO_PATIENT_ID, text, {
-      onStep: (event) => {
-        liveSteps.push({
-          label: event.label,
-          detail: event.detail,
-          searches: event.searches,
-          icon: mapStepToIcon(event.label),
-          duration: 0,
-        });
-        setProcessing((p) =>
-          p && p.id === mid
-            ? { ...p, steps: [...liveSteps], currentStep: liveSteps.length, chain: { ...p.chain, steps: [...liveSteps] } }
-            : p
-        );
-      },
-      onStepDone: () => {
-        // Steps auto-advance via currentStep tracking
-      },
-      onText: (event) => {
-        replyBuffer += event.chunk;
-      },
-      onResult: (event) => {
-        setProcessing((p) => (p && p.id === mid ? { ...p, finished: true } : p));
-        setTimeout(() => {
-          const resultType = event.action === "ESCALATE" ? "escalation"
-            : event.action === "FIND_OBJECT" ? "object_found"
-            : "info";
-          setMessages((p) => [
-            ...p,
-            { role: "thinking", steps: liveSteps, id: mid, time: new Date() },
-            {
-              role: "assistant",
-              text: event.reply || replyBuffer,
-              type: resultType,
-              time: new Date(),
-            },
-          ]);
-          setExpandedSteppers((p) => ({ ...p, [mid]: false }));
-          setProcessing(null);
-          if (event.action === "ESCALATE") {
-            setShowEscalation(true);
-            setTimeout(() => setShowEscalation(false), 4000);
-          }
-        }, 400);
-      },
-      onError: (err) => {
-        console.error("Live chat error:", err);
-        setProcessing(null);
-        setMessages((p) => [
-          ...p,
-          { role: "assistant", text: "Connection error. Try demo mode.", type: "info", time: new Date() },
-        ]);
-      },
-    });
-  }, []);
-
   const send = useCallback((text: string) => {
-    if (!text.trim()) return;
-    if (liveMode) {
-      sendLive(text);
-    } else {
-      sendDemo(text);
-    }
-  }, [liveMode, sendLive, sendDemo]);
+    if (!text.trim() || liveMode) return;
+    sendDemo(text);
+  }, [liveMode, sendDemo]);
 
   const handleMic = () => {
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -687,6 +690,8 @@ export default function StreamPage() {
         @keyframes hud-rec{0%,100%{opacity:1}50%{opacity:0.3}}
         @keyframes hud-listening{0%,100%{box-shadow:0 0 0 0 rgba(120,255,200,0.4)}50%{box-shadow:0 0 0 12px rgba(120,255,200,0)}}
         @keyframes hud-grid-pulse{0%,100%{opacity:0.03}50%{opacity:0.06}}
+        .hud-text{text-shadow:0 1px 4px rgba(0,0,0,0.7),0 0 12px rgba(0,0,0,0.4)}
+        .hud-label{text-shadow:0 1px 3px rgba(0,0,0,0.8)}
         *{box-sizing:border-box}
         ::-webkit-scrollbar{width:3px}::-webkit-scrollbar-thumb{background:rgba(255,255,255,0.1);border-radius:3px}
       `}</style>
@@ -757,7 +762,7 @@ export default function StreamPage() {
       ))}
 
       {/* ──── TOP LEFT: Mira branding + LIVE ──── */}
-      <div style={{ position: "absolute", top: 28, left: 56, zIndex: 10, display: "flex", alignItems: "center", gap: 14 }}>
+      <div className="hud-text" style={{ position: "absolute", top: 28, left: 56, zIndex: 10, display: "flex", alignItems: "center", gap: 14 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <div style={{ width: 32, height: 32, borderRadius: 10, background: "rgba(120,255,200,0.1)", border: "1px solid rgba(120,255,200,0.2)", display: "flex", alignItems: "center", justifyContent: "center" }}>
             <svg width="16" height="16" fill="none" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4" fill="rgba(120,255,200,0.8)" /><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7" stroke="rgba(120,255,200,0.8)" strokeWidth="2" strokeLinecap="round" /></svg>
@@ -774,13 +779,13 @@ export default function StreamPage() {
       </div>
 
       {/* ──── TOP RIGHT: Clock ──── */}
-      <div style={{ position: "absolute", top: 28, right: 56, zIndex: 10, textAlign: "right" }}>
+      <div className="hud-text" style={{ position: "absolute", top: 28, right: 56, zIndex: 10, textAlign: "right" }}>
         <div style={{ fontSize: 20, color: "rgba(255,255,255,0.8)", fontFamily: "'DM Mono', monospace", fontWeight: 500, letterSpacing: "0.05em" }}>{fmtClock(clock)}</div>
         <div style={{ fontSize: 10, color: videoReady ? "rgba(120,255,200,0.4)" : "rgba(255,255,255,0.3)", fontFamily: "'DM Mono', monospace", marginTop: 2 }}>{videoReady ? "CAM LIVE \u00b7 1080p" : "CAM \u00b7 NO SIGNAL"}</div>
       </div>
 
       {/* ──── TOP CENTER: Patient bar ──── */}
-      <div style={{ position: "absolute", top: 28, left: "50%", transform: "translateX(-50%)", zIndex: 10, display: "flex", alignItems: "center", gap: 16, padding: "8px 20px", background: "rgba(0,0,0,0.4)", backdropFilter: "blur(12px)", borderRadius: 12, border: "1px solid rgba(255,255,255,0.08)" }}>
+      <div className="hud-text" style={{ position: "absolute", top: 28, left: "50%", transform: "translateX(-50%)", zIndex: 10, display: "flex", alignItems: "center", gap: 16, padding: "8px 20px", background: "rgba(0,0,0,0.55)", backdropFilter: "blur(16px)", borderRadius: 12, border: "1px solid rgba(255,255,255,0.12)" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
           <div style={{ width: 8, height: 8, borderRadius: "50%", background: "rgba(120,255,200,0.7)" }} />
           <span style={{ fontSize: 12, color: "rgba(255,255,255,0.7)", fontWeight: 600 }}>Margaret Chen</span>
@@ -791,7 +796,7 @@ export default function StreamPage() {
       </div>
 
       {/* ──── BOTTOM LEFT: Sensor data + mode toggle ──── */}
-      <div style={{ position: "absolute", bottom: 32, left: 56, zIndex: 10 }}>
+      <div className="hud-text" style={{ position: "absolute", bottom: 32, left: 56, zIndex: 10 }}>
         <div style={{ fontSize: 10, color: "rgba(255,255,255,0.25)", fontFamily: "'DM Mono', monospace", lineHeight: 1.8 }}>
           <div>DEPTH: 3.2m · OUTDOOR</div>
           <div>IMU: stable · GPS: 37.4275°N</div>
@@ -837,9 +842,10 @@ export default function StreamPage() {
             return (
               <div key={i} className="hud-fadein" style={{ display: "flex", flexDirection: "column", alignItems: isUser ? "flex-end" : "flex-start" }}>
                 <div
+                  className="hud-label"
                   style={{
-                    fontSize: 10,
-                    color: isUser ? "rgba(255,255,255,0.3)" : "rgba(120,255,200,0.5)",
+                    fontSize: 11,
+                    color: isUser ? "rgba(255,255,255,0.5)" : "rgba(120,255,200,0.7)",
                     fontFamily: "'DM Mono', monospace",
                     fontWeight: 600,
                     marginBottom: 3,
@@ -851,15 +857,17 @@ export default function StreamPage() {
                 </div>
                 <div
                   style={{
-                    padding: "10px 16px",
+                    padding: "12px 18px",
                     borderRadius: isUser ? "14px 14px 4px 14px" : "14px 14px 14px 4px",
-                    background: isUser ? "rgba(255,255,255,0.08)" : "rgba(120,255,200,0.06)",
-                    backdropFilter: "blur(16px)",
-                    border: `1px solid ${isUser ? "rgba(255,255,255,0.1)" : "rgba(120,255,200,0.12)"}`,
-                    color: isUser ? "rgba(255,255,255,0.85)" : "rgba(255,255,255,0.9)",
-                    fontSize: 14,
-                    lineHeight: 1.5,
+                    background: isUser ? "rgba(0,0,0,0.55)" : "rgba(0,0,0,0.5)",
+                    backdropFilter: "blur(20px)",
+                    WebkitBackdropFilter: "blur(20px)",
+                    border: `1px solid ${isUser ? "rgba(255,255,255,0.15)" : "rgba(120,255,200,0.2)"}`,
+                    color: "rgba(255,255,255,0.95)",
+                    fontSize: 15,
+                    lineHeight: 1.55,
                     maxWidth: "95%",
+                    textShadow: "0 1px 2px rgba(0,0,0,0.5)",
                   }}
                 >
                   {isUser ? (msg as UserMsg).text : am.text}
@@ -867,9 +875,20 @@ export default function StreamPage() {
                     <LocationTag location={am.location} confidence={am.confidence} coords={am.coords} />
                   )}
                   {!isUser && am.type === "escalation" && (
-                    <div style={{ marginTop: 8, display: "flex", alignItems: "center", gap: 6, padding: "6px 12px", background: "rgba(200,80,30,0.15)", border: "1px solid rgba(200,80,30,0.3)", borderRadius: 8, fontSize: 12, color: "rgba(255,180,130,0.9)", fontWeight: 500 }}>
+                    <div style={{ marginTop: 8, display: "flex", alignItems: "center", gap: 6, padding: "6px 12px", background: "rgba(200,80,30,0.3)", border: "1px solid rgba(255,150,100,0.4)", borderRadius: 8, fontSize: 13, color: "rgba(255,200,160,1)", fontWeight: 600 }}>
                       <svg width="12" height="12" fill="none" viewBox="0 0 24 24"><path d="M22 16.92v3a2 2 0 01-2.18 2 19.79 19.79 0 01-8.63-3.07 19.5 19.5 0 01-6-6A19.79 19.79 0 012.12 4.18 2 2 0 014.11 2h3a2 2 0 012 1.72c.127.96.361 1.903.7 2.81a2 2 0 01-.45 2.11L8.09 9.91a16 16 0 006 6l1.27-1.27a2 2 0 012.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0122 16.92z" stroke="currentColor" strokeWidth="2" /></svg>
                       Contacting David Chen\u2026
+                    </div>
+                  )}
+                  {/* Citations from Sonar */}
+                  {!isUser && am.citations && am.citations.length > 0 && (
+                    <div style={{ marginTop: 8, paddingTop: 6, borderTop: "1px solid rgba(120,255,200,0.15)" }}>
+                      <div style={{ fontSize: 10, fontWeight: 700, color: "rgba(120,255,200,0.6)", letterSpacing: "0.08em", marginBottom: 3 }}>SOURCES</div>
+                      {am.citations.map((c, ci) => (
+                        <div key={ci} style={{ fontSize: 12, color: "rgba(120,255,200,0.8)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                          {c.title || (() => { try { return new URL(c.url).hostname; } catch { return c.url; } })()}
+                        </div>
+                      ))}
                     </div>
                   )}
                 </div>
@@ -884,108 +903,119 @@ export default function StreamPage() {
           <div ref={chatEndRef} />
         </div>
 
-        {/* Quick actions */}
-        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", padding: "6px 0" }}>
-          {["Where are my glasses?", "What meds do I take?", "I need help", "Where is my walker?"].map((q) => (
-            <button
-              key={q}
-              onClick={() => !processing && send(q)}
-              style={{
-                padding: "6px 14px",
-                borderRadius: 10,
-                border: "1px solid rgba(255,255,255,0.08)",
-                background: "rgba(255,255,255,0.04)",
-                backdropFilter: "blur(8px)",
-                fontSize: 12,
-                color: processing ? "rgba(255,255,255,0.15)" : "rgba(255,255,255,0.5)",
-                fontWeight: 500,
-                cursor: processing ? "default" : "pointer",
-                fontFamily: "inherit",
-                transition: "all 0.2s",
-              }}
-            >
-              {q}
-            </button>
-          ))}
-        </div>
-
-        {/* Input */}
-        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-          <div
-            style={{
-              flex: 1,
-              display: "flex",
-              alignItems: "center",
-              background: "rgba(0,0,0,0.4)",
-              backdropFilter: "blur(16px)",
-              borderRadius: 14,
-              padding: "4px 6px 4px 16px",
-              border: "1px solid rgba(255,255,255,0.08)",
-            }}
-          >
-            <input
-              type="text"
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && !processing && send(input)}
-              placeholder="Type or tap mic\u2026"
-              disabled={!!processing}
-              style={{
-                flex: 1,
-                border: "none",
-                outline: "none",
-                fontSize: 14,
-                color: "rgba(255,255,255,0.85)",
-                fontFamily: "inherit",
-                background: "transparent",
-              }}
-            />
-            <button
-              onClick={() => !processing && send(input)}
-              disabled={!!processing || !input.trim()}
-              style={{
-                width: 34,
-                height: 34,
-                borderRadius: "50%",
-                border: "none",
-                background: input.trim() && !processing ? "rgba(120,255,200,0.15)" : "rgba(255,255,255,0.04)",
-                cursor: input.trim() && !processing ? "pointer" : "default",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                transition: "all 0.2s",
-              }}
-            >
-              <svg width="14" height="14" fill="none" viewBox="0 0 24 24">
-                <path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z" stroke={input.trim() && !processing ? "rgba(120,255,200,0.8)" : "rgba(255,255,255,0.2)"} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-              </svg>
-            </button>
+        {liveMode ? (
+          /* Live mode: mirroring indicator */
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8, padding: "12px 0" }}>
+            <div style={{ width: 8, height: 8, borderRadius: "50%", background: "rgba(120,255,200,0.8)", animation: "hud-pulse-kf 1.5s ease-in-out infinite" }} />
+            <span style={{ fontSize: 12, fontFamily: "'DM Mono', monospace", color: "rgba(120,255,200,0.7)", fontWeight: 500, letterSpacing: "0.05em", textShadow: "0 1px 3px rgba(0,0,0,0.6)" }}>
+              MIRRORING DEVICE CHAT
+            </span>
           </div>
-          <button
-            onClick={handleMic}
-            style={{
-              width: 48,
-              height: 48,
-              borderRadius: "50%",
-              border: `1.5px solid ${listening ? "rgba(120,255,200,0.6)" : "rgba(255,255,255,0.12)"}`,
-              background: listening ? "rgba(120,255,200,0.12)" : "rgba(0,0,0,0.4)",
-              backdropFilter: "blur(12px)",
-              cursor: "pointer",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              transition: "all 0.3s ease",
-              flexShrink: 0,
-              animation: listening ? "hud-listening 1.5s ease-in-out infinite" : "none",
-            }}
-          >
-            <svg width="18" height="18" fill="none" viewBox="0 0 24 24">
-              <rect x="9" y="2" width="6" height="12" rx="3" fill={listening ? "rgba(120,255,200,0.9)" : "rgba(255,255,255,0.5)"} />
-              <path d="M5 10a7 7 0 0014 0" stroke={listening ? "rgba(120,255,200,0.9)" : "rgba(255,255,255,0.5)"} strokeWidth="2" strokeLinecap="round" />
-              <path d="M12 19v3M8 22h8" stroke={listening ? "rgba(120,255,200,0.9)" : "rgba(255,255,255,0.5)"} strokeWidth="2" strokeLinecap="round" />
-            </svg>
-          </button>
-        </div>
+        ) : (
+          /* Demo mode: quick actions + input */
+          <>
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", padding: "6px 0" }}>
+              {["Where are my glasses?", "What meds do I take?", "I need help", "Where is my walker?"].map((q) => (
+                <button
+                  key={q}
+                  onClick={() => !processing && send(q)}
+                  style={{
+                    padding: "7px 16px",
+                    borderRadius: 10,
+                    border: "1px solid rgba(255,255,255,0.12)",
+                    background: "rgba(0,0,0,0.4)",
+                    backdropFilter: "blur(12px)",
+                    fontSize: 13,
+                    color: processing ? "rgba(255,255,255,0.2)" : "rgba(255,255,255,0.7)",
+                    textShadow: "0 1px 2px rgba(0,0,0,0.5)",
+                    fontWeight: 500,
+                    cursor: processing ? "default" : "pointer",
+                    fontFamily: "inherit",
+                    transition: "all 0.2s",
+                  }}
+                >
+                  {q}
+                </button>
+              ))}
+            </div>
+            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+              <div
+                style={{
+                  flex: 1,
+                  display: "flex",
+                  alignItems: "center",
+                  background: "rgba(0,0,0,0.55)",
+                  backdropFilter: "blur(20px)",
+                  borderRadius: 14,
+                  padding: "4px 6px 4px 16px",
+                  border: "1px solid rgba(255,255,255,0.12)",
+                }}
+              >
+                <input
+                  type="text"
+                  value={input}
+                  onChange={(e) => setInput(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && !processing && send(input)}
+                  placeholder="Type or tap mic\u2026"
+                  disabled={!!processing}
+                  style={{
+                    flex: 1,
+                    border: "none",
+                    outline: "none",
+                    fontSize: 14,
+                    color: "rgba(255,255,255,0.85)",
+                    fontFamily: "inherit",
+                    background: "transparent",
+                  }}
+                />
+                <button
+                  onClick={() => !processing && send(input)}
+                  disabled={!!processing || !input.trim()}
+                  style={{
+                    width: 34,
+                    height: 34,
+                    borderRadius: "50%",
+                    border: "none",
+                    background: input.trim() && !processing ? "rgba(120,255,200,0.15)" : "rgba(255,255,255,0.04)",
+                    cursor: input.trim() && !processing ? "pointer" : "default",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    transition: "all 0.2s",
+                  }}
+                >
+                  <svg width="14" height="14" fill="none" viewBox="0 0 24 24">
+                    <path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z" stroke={input.trim() && !processing ? "rgba(120,255,200,0.8)" : "rgba(255,255,255,0.2)"} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                </button>
+              </div>
+              <button
+                onClick={handleMic}
+                style={{
+                  width: 48,
+                  height: 48,
+                  borderRadius: "50%",
+                  border: `1.5px solid ${listening ? "rgba(120,255,200,0.6)" : "rgba(255,255,255,0.12)"}`,
+                  background: listening ? "rgba(120,255,200,0.15)" : "rgba(0,0,0,0.55)",
+                  backdropFilter: "blur(12px)",
+                  cursor: "pointer",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  transition: "all 0.3s ease",
+                  flexShrink: 0,
+                  animation: listening ? "hud-listening 1.5s ease-in-out infinite" : "none",
+                }}
+              >
+                <svg width="18" height="18" fill="none" viewBox="0 0 24 24">
+                  <rect x="9" y="2" width="6" height="12" rx="3" fill={listening ? "rgba(120,255,200,0.9)" : "rgba(255,255,255,0.5)"} />
+                  <path d="M5 10a7 7 0 0014 0" stroke={listening ? "rgba(120,255,200,0.9)" : "rgba(255,255,255,0.5)"} strokeWidth="2" strokeLinecap="round" />
+                  <path d="M12 19v3M8 22h8" stroke={listening ? "rgba(120,255,200,0.9)" : "rgba(255,255,255,0.5)"} strokeWidth="2" strokeLinecap="round" />
+                </svg>
+              </button>
+            </div>
+          </>
+        )}
       </div>
     </div>
   );
