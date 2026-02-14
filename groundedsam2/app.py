@@ -410,13 +410,15 @@ def main(
         ann_frame_idx=ann_frame_idx,
     )
 
-    # Save output video
-    out_video = p.with_name(f"{p.stem}_tracked.mp4")
+    # Save outputs to data/groundedsam2/
+    out_dir = pathlib.Path(__file__).parent.parent / "data" / "groundedsam2"
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    out_video = out_dir / f"{p.stem}_tracked.mp4"
     out_video.write_bytes(result["video"])
     print(f"Wrote {out_video} ({len(result['video']) / 1024 / 1024:.1f} MB)")
 
-    # Save detections JSON
-    out_json = p.with_name(f"{p.stem}_detections.json")
+    out_json = out_dir / f"{p.stem}_detections.json"
     out_json.write_text(result["detections_json"])
 
     print(f"Processed {result['num_frames']} frames at {result['source_fps']:.1f} fps")
