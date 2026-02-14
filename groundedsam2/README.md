@@ -38,7 +38,31 @@ Process all `data/*.MOV` files in parallel across separate A100s:
 modal run groundedsam2/run_batch.py --text-prompt "book. door. painting. chair."
 ```
 
-Results go to `groundedsam2/examples/`.
+Results go to `data/groundedsam2/`.
+
+## Object-Aware Depth
+
+Combines Grounded SAM 2 tracking with [Depth Anything V2](https://github.com/DepthAnything/Depth-Anything-V2) to get depth maps masked to only the segmented objects.
+
+```bash
+modal run groundedsam2/depth_app.py --video-path data/IMG_4723.MOV --text-prompt "painting. chair. lamp. door."
+```
+
+Outputs to `data/groundedsam2/`:
+- `{stem}_masked_depth.mp4` — depth colormap only where objects are, black elsewhere
+- `{stem}_composite.mp4` — full depth dimmed to 20%, objects at full brightness with colored outlines + labels
+- `{stem}_seg_depth.json` — per-frame detection metadata
+
+### Viewer
+
+Three-panel playback (Original | Object Depth | Composite):
+
+```bash
+python groundedsam2/depth_viewer.py data/groundedsam2/ --source-dir data/
+# Open http://localhost:8080
+```
+
+Keyboard: `Space` play/pause, `←→` step, `[]` ±5 frames, `Home`/`End` first/last.
 
 ## Pipeline
 
