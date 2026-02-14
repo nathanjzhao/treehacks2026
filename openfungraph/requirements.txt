@@ -1,0 +1,7 @@
+numpy
+trimesh
+viser
+fastapi
+uvicorn[standard]
+jinja2
+open3d
