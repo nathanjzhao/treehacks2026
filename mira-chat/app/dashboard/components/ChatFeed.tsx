@@ -1,7 +1,9 @@
 "use client";
 
 import { useEffect, useRef } from "react";
+import { Streamdown } from "streamdown";
 import { MiraEvent } from "@/lib/supabase/client";
+import CitationCard from "@/app/components/CitationCard";
 
 interface ChatFeedProps {
   events: MiraEvent[];
@@ -54,9 +56,11 @@ export default function ChatFeed({ events }: ChatFeedProps) {
                 {isUser ? "Resident" : "Mira"}
               </div>
 
-              <p className="text-sm text-slate-700 leading-relaxed">
-                {event.receipt_text || "..."}
-              </p>
+              <div className="text-sm text-slate-700 leading-relaxed prose prose-sm prose-slate max-w-none">
+                <Streamdown mode="static">
+                  {event.receipt_text || "..."}
+                </Streamdown>
+              </div>
 
               {/* Action badge */}
               {!isUser && action && action !== "ANSWER" && (
@@ -73,20 +77,12 @@ export default function ChatFeed({ events }: ChatFeedProps) {
 
               {/* Citations */}
               {!isUser && citations && citations.length > 0 && (
-                <div className="mt-2 pt-2 border-t border-teal-100 space-y-1">
+                <div className="mt-2 pt-2 border-t border-teal-100 space-y-1.5">
                   <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
                     Sources
                   </div>
                   {citations.map((c, i) => (
-                    <a
-                      key={i}
-                      href={c.url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="block text-[11px] text-teal-600 hover:underline truncate"
-                    >
-                      {c.title || c.url}
-                    </a>
+                    <CitationCard key={i} citation={c} variant="light" />
                   ))}
                 </div>
               )}
