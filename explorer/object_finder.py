@@ -13,7 +13,10 @@ from camera_utils import (
     look_at_wxyz,
     localize_by_ray,
 )
-from gemini_client import query_object_location
+from gemini_client import query_object_location, detect_up_direction
+
+# Cached scene up direction (detected once via Gemini)
+_scene_up: np.ndarray | None = None
 
 RENDER_WIDTH = 640
 RENDER_HEIGHT = 480
@@ -88,7 +91,53 @@ async def find_and_fly_to_object(
     3. Depth-filtered multi-view localization
     4. Fly camera + marker animation
     """
+    global _scene_up
     loop = asyncio.get_event_loop()
+
+    # --- Detect scene "up" direction on first run ---
+    if _scene_up is None and camera_positions and len(camera_positions) > 0:
+        await send_status("Detecting scene orientation...")
+        try:
+            # Render the same view with 3 candidate up vectors
+            test_pos = camera_positions[0]
+            test_look = centroid
+            up_candidates = [
+                (np.array([0.0, 0.0, 1.0]), "A (+Z up)"),
+                (np.array([0.0, 1.0, 0.0]), "B (+Y up)"),
+                (np.array([0.0, -1.0, 0.0]), "C (-Y up)"),
+            ]
+            up_renders = []
+            up_labels = []
+            for up_vec, label in up_candidates:
+                wxyz = look_at_wxyz(test_pos, test_look, up=up_vec)
+                render = await loop.run_in_executor(
+                    None,
+                    lambda wxyz=wxyz: client.get_render(
+                        height=RENDER_HEIGHT,
+                        width=RENDER_WIDTH,
+                        wxyz=tuple(wxyz),
+                        position=tuple(test_pos),
+                        fov=RENDER_FOV,
+                    ),
+                )
+                arr = np.array(render)
+                up_renders.append(arr)
+                up_labels.append(label)
+                # Save debug renders
+                debug_dir = Path(__file__).parent / "debug_renders"
+                debug_dir.mkdir(exist_ok=True)
+                img = Image.fromarray(arr)
+                if img.mode == "RGBA":
+                    img = img.convert("RGB")
+                img.save(debug_dir / f"up_test_{label[0]}.jpg")
+
+            _scene_up = await detect_up_direction(up_renders, up_labels)
+            print(f"[Pipeline] Scene up direction: {_scene_up}", flush=True)
+        except Exception as e:
+            print(f"[Pipeline] Up detection failed: {e}, using +Z", flush=True)
+            _scene_up = np.array([0.0, 0.0, 1.0])
+
+    up = _scene_up if _scene_up is not None else np.array([0.0, 0.0, 1.0])
 
     # Clean up any previous search markers
     if server is not None:
@@ -291,30 +340,23 @@ async def find_and_fly_to_object(
             position=tuple(label_offset),
         )
 
-    # --- Step 5: Fly camera to the best viewing angle (always upright) ---
+    # --- Step 5: Fly camera to the best viewing position ---
+    # Use original VGGT camera positions — guaranteed to be in free space.
+    # Pick the one that saw the object with highest confidence, or nearest.
     if detections:
         best_det = max(detections, key=lambda d: d.get("confidence", 0))
         best_vp = valid_viewpoints[best_det["view_index"]]
-        view_dir = best_vp["position"] - target_3d
     else:
-        # box_3d path or no detections — pick nearest camera
         dists = [np.linalg.norm(vp["position"] - target_3d) for vp in valid_viewpoints]
         best_vp = valid_viewpoints[int(np.argmin(dists))]
-        view_dir = best_vp["position"] - target_3d
-    # Flatten the view direction to be roughly horizontal so we approach from the side
-    view_dir[2] = 0
-    if np.linalg.norm(view_dir) < 1e-6:
-        view_dir = np.array([1.0, 0.0, 0.0])
-    view_dir = view_dir / (np.linalg.norm(view_dir) + 1e-8)
-    fly_distance = scene_scale * 0.15
-    # Place camera slightly above the target for a natural downward gaze
-    dest_pos = target_3d + view_dir * fly_distance
-    dest_pos[2] += fly_distance * 0.3
+
+    # Fly to the original camera position but look at the target
+    dest_pos = np.array(best_vp["position"])
     dest_look_at = target_3d
 
     start_pos = np.array(client.camera.position)
     start_wxyz = np.array(client.camera.wxyz)
-    dest_wxyz = look_at_wxyz(dest_pos, dest_look_at, up=np.array([0.0, 0.0, 1.0]))
+    dest_wxyz = look_at_wxyz(dest_pos, dest_look_at, up=up)
 
     n_frames = int(FLY_DURATION * FLY_FPS)
     frame_dt = FLY_DURATION / n_frames
@@ -334,7 +376,7 @@ async def find_and_fly_to_object(
 
     with client.atomic():
         client.camera.wxyz = tuple(dest_wxyz)
-        client.camera.up_direction = (0.0, 0.0, 1.0)
+        client.camera.up_direction = tuple(up)
 
     # --- Step 6: Pulse the marker ---
     if server is not None:
