@@ -1,12 +1,12 @@
 """
 Viser-based 3D viewer for OpenFunGraph scene graphs.
 
-Usage: python viewer.py examples/              # browse all PKLs in directory
-       python viewer.py examples/scene.pkl     # open a specific file
+Usage: python viewer.py data/              # browse all JSONs in directory
+       python viewer.py data/scene.json    # open a specific file
 """
 
 import argparse
-import pickle
+import json
 from pathlib import Path
 
 import numpy as np
@@ -18,9 +18,18 @@ from jinja2 import Template
 
 
 def load_scene_graph(path: str) -> dict:
-    """Load a serialized OpenFunGraph scene graph from pickle."""
-    with open(path, "rb") as f:
-        data = pickle.load(f)
+    """Load a serialized OpenFunGraph scene graph from JSON."""
+    with open(path) as f:
+        data = json.load(f)
+    # Convert list arrays back to numpy
+    for obj in data.get("objects", []):
+        for key in ("pcd_np", "pcd_color_np", "clip_ft", "text_ft"):
+            if key in obj and isinstance(obj[key], list):
+                obj[key] = np.array(obj[key])
+    for part in data.get("parts", []):
+        for key in ("pcd_np", "pcd_color_np", "clip_ft", "text_ft"):
+            if key in part and isinstance(part[key], list):
+                part[key] = np.array(part[key])
     n_objects = len(data.get("objects", []))
     n_parts = len(data.get("parts", []))
     n_edges = len(data.get("edges", []))
@@ -228,34 +237,77 @@ def _load_and_display(server: viser.ViserServer, pkl_path: str, point_size: floa
     else:
         centroid = np.zeros(3)
 
-    cam_positions = scene_data.get("camera_positions", [])
+    # Camera poses (cam-to-world 4x4 matrices)
+    cam_poses_raw = scene_data.get("camera_poses", [])
+    cam_poses = [np.array(p) for p in cam_poses_raw] if cam_poses_raw else []
+    cam_positions = [p[:3, 3] for p in cam_poses] if cam_poses else []
+
     up = _estimate_up(cam_positions, centroid)
 
-    if cam_positions:
-        first_cam_pos = np.array(cam_positions[0])
-        look_dir = centroid - first_cam_pos
-        look_dir /= np.linalg.norm(look_dir) + 1e-8
-        init_cam_pos = first_cam_pos - look_dir * 0.3
+    # Draw camera frustums
+    server.scene.remove_by_name("/cameras")
+    frustum_size = 0.08
+    for ci, pose in enumerate(cam_poses):
+        pos = pose[:3, 3]
+        R = pose[:3, :3]
+        corners_cam = np.array([
+            [-1, -0.75, -1],
+            [ 1, -0.75, -1],
+            [ 1,  0.75, -1],
+            [-1,  0.75, -1],
+        ]) * frustum_size
+        corners_world = (R @ corners_cam.T).T + pos
+        apex = pos.astype(np.float32)
+        lines_pts = []
+        for c in corners_world:
+            lines_pts.extend([apex, c.astype(np.float32)])
+        for idx in range(4):
+            lines_pts.extend([
+                corners_world[idx].astype(np.float32),
+                corners_world[(idx + 1) % 4].astype(np.float32),
+            ])
+        lines_arr = np.array(lines_pts, dtype=np.float32)
+        color = [255, 220, 50] if ci == 0 else [100, 180, 255]
+        colors_arr = np.tile(np.array([color], dtype=np.uint8), (len(lines_arr), 1))
+        server.scene.add_point_cloud(
+            name=f"/cameras/frustum_{ci}",
+            points=lines_arr,
+            colors=colors_arr,
+            point_size=point_size * 0.4,
+            point_shape="circle",
+        )
+
+    # Set initial camera to first original camera POV
+    if cam_poses:
+        pose0 = cam_poses[0]
+        init_cam_pos = pose0[:3, 3]
+        R0 = pose0[:3, :3]
+        look_at = init_cam_pos + R0 @ np.array([0, 0, -1])
+        up = R0 @ np.array([0, -1, 0])
     elif all_points:
         bbox_extent = all_pts.max(axis=0) - all_pts.min(axis=0)
         cam_distance = float(np.linalg.norm(bbox_extent)) * 0.8
         init_cam_pos = centroid + up * cam_distance
+        look_at = centroid
     else:
         init_cam_pos = np.array([0, -2, 1])
+        look_at = centroid
 
     # Move all connected clients
     for client in server.get_clients().values():
         client.camera.position = tuple(init_cam_pos)
-        client.camera.look_at = tuple(centroid)
+        client.camera.look_at = tuple(look_at)
         client.camera.up_direction = tuple(up)
 
     return {
         "scene_data": scene_data,
         "centroid": centroid,
         "init_cam_pos": init_cam_pos,
+        "look_at": look_at,
         "up": up,
         "objects": objects,
         "obj_colors": obj_colors,
+        "cam_poses": cam_poses,
     }
 
 
@@ -264,42 +316,42 @@ def main():
     global VISER_PORT
 
     parser = argparse.ArgumentParser(description="View OpenFunGraph scene graphs")
-    parser.add_argument("scene_graph", help="Path to .pkl file or directory of .pkl files")
+    parser.add_argument("scene_graph", help="Path to .json file or directory of .json files")
     parser.add_argument("--port", type=int, default=8080, help="Main web UI port")
     parser.add_argument("--viser-port", type=int, default=8081, help="Internal viser port")
     parser.add_argument("--point-size", type=float, default=0.02, help="Point size")
     args = parser.parse_args()
     VISER_PORT = args.viser_port
 
-    # Discover all PKL files
-    pkl_input = Path(args.scene_graph)
-    if pkl_input.is_dir():
-        pkl_files = sorted(pkl_input.glob("*.pkl"))
+    # Discover all JSON scene graph files
+    sg_input = Path(args.scene_graph)
+    if sg_input.is_dir():
+        sg_files = sorted(sg_input.glob("*.json"))
     else:
-        pkl_files = [pkl_input]
-        siblings = sorted(pkl_input.parent.glob("*.pkl"))
+        sg_files = [sg_input]
+        siblings = sorted(sg_input.parent.glob("*.json"))
         if len(siblings) > 1:
-            pkl_files = siblings
+            sg_files = siblings
 
-    if not pkl_files:
-        raise ValueError(f"No .pkl files found at {args.scene_graph}")
+    if not sg_files:
+        raise ValueError(f"No .json files found at {args.scene_graph}")
 
-    pkl_names = [f.stem for f in pkl_files]
-    pkl_map = {f.stem: str(f) for f in pkl_files}
-    initial_name = pkl_input.stem if pkl_input.is_file() else pkl_names[0]
+    sg_names = [f.stem for f in sg_files]
+    sg_map = {f.stem: str(f) for f in sg_files}
+    initial_name = sg_input.stem if sg_input.is_file() else sg_names[0]
 
-    print(f"Found {len(pkl_files)} scene graph files: {', '.join(pkl_names)}")
+    print(f"Found {len(sg_files)} scene graph files: {', '.join(sg_names)}")
 
     # --- Start viser ---
     server = viser.ViserServer(host="0.0.0.0", port=args.viser_port)
 
-    state = _load_and_display(server, pkl_map[initial_name], args.point_size)
+    state = _load_and_display(server, sg_map[initial_name], args.point_size)
 
     with server.gui.add_folder("Viewer"):
-        if len(pkl_files) > 1:
+        if len(sg_files) > 1:
             gui_file = server.gui.add_dropdown(
                 "Scene",
-                options=pkl_names,
+                options=sg_names,
                 initial_value=initial_name,
             )
 
@@ -307,7 +359,7 @@ def main():
             def _on_file_change(_):
                 name = gui_file.value
                 print(f"\nSwitching to {name}...")
-                new_state = _load_and_display(server, pkl_map[name], gui_point_size.value)
+                new_state = _load_and_display(server, sg_map[name], gui_point_size.value)
                 state.update(new_state)
 
         gui_point_size = server.gui.add_slider(
@@ -316,7 +368,6 @@ def main():
 
         @gui_point_size.on_update
         def _on_size_change(_):
-            # Re-render objects with new point size
             objects = state.get("objects", [])
             obj_colors = state.get("obj_colors", [])
             ps = gui_point_size.value
@@ -338,10 +389,32 @@ def main():
                     point_shape="rounded",
                 )
 
+    with server.gui.add_folder("Camera"):
+        n_cams = len(state.get("cam_poses", []))
+        if n_cams > 0:
+            gui_cam_idx = server.gui.add_slider(
+                "Frame", min=0, max=n_cams - 1, step=1, initial_value=0
+            )
+
+            @gui_cam_idx.on_update
+            def _on_cam_change(_):
+                cam_poses = state.get("cam_poses", [])
+                idx = int(gui_cam_idx.value)
+                if 0 <= idx < len(cam_poses):
+                    pose = cam_poses[idx]
+                    pos = pose[:3, 3]
+                    R = pose[:3, :3]
+                    look_at = pos + R @ np.array([0, 0, -1])
+                    up_dir = R @ np.array([0, -1, 0])
+                    for client in server.get_clients().values():
+                        client.camera.position = tuple(pos)
+                        client.camera.look_at = tuple(look_at)
+                        client.camera.up_direction = tuple(up_dir)
+
     @server.on_client_connect
     def _(client: viser.ClientHandle):
         client.camera.position = tuple(state["init_cam_pos"])
-        client.camera.look_at = tuple(state["centroid"])
+        client.camera.look_at = tuple(state["look_at"])
         client.camera.up_direction = tuple(state["up"])
 
     print(f"\nViser running on http://localhost:{args.viser_port}")
