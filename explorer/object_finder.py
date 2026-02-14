@@ -11,10 +11,9 @@ from PIL import Image
 
 from camera_utils import (
     look_at_wxyz,
-    interpolate_camera,
     localize_by_ray,
 )
-from openrouter_client import query_object_location
+from gemini_client import query_object_location
 
 RENDER_WIDTH = 640
 RENDER_HEIGHT = 480
@@ -28,6 +27,27 @@ PULSE_FPS = 30
 MARKER_COLOR_PRIMARY = (255, 50, 50)  # bright red — high contrast
 MARKER_COLOR_RING = (255, 180, 60)  # warm orange ring
 MARKER_SCALE = 0.003  # relative to scene size
+
+
+def _slerp(q0: np.ndarray, q1: np.ndarray, t: float) -> np.ndarray:
+    """Spherical linear interpolation between two wxyz quaternions."""
+    q0 = q0 / (np.linalg.norm(q0) + 1e-8)
+    q1 = q1 / (np.linalg.norm(q1) + 1e-8)
+    dot = np.dot(q0, q1)
+    if dot < 0:
+        q1 = -q1
+        dot = -dot
+    if dot > 0.9995:
+        result = q0 + t * (q1 - q0)
+        return result / np.linalg.norm(result)
+    theta_0 = np.arccos(np.clip(dot, -1, 1))
+    theta = theta_0 * t
+    sin_theta = np.sin(theta)
+    sin_theta_0 = np.sin(theta_0)
+    s0 = np.cos(theta) - dot * sin_theta / sin_theta_0
+    s1 = sin_theta / sin_theta_0
+    result = s0 * q0 + s1 * q1
+    return result / np.linalg.norm(result)
 
 
 def _select_diverse_cameras(
@@ -187,10 +207,12 @@ async def find_and_fly_to_object(
     for attempt in range(MAX_LLM_RETRIES):
         result = await query_object_location(query, renders, render_labels)
         detections = result.get("detections", [])
+        target_3d_direct = result.get("target_3d")
         description = result.get("description", "No description")
-        print(f"[Pipeline] LLM attempt {attempt+1}: {len(detections)} detections, desc={description}", flush=True)
+        print(f"[Pipeline] LLM attempt {attempt+1}: {len(detections)} detections, "
+              f"box_3d={'yes' if target_3d_direct else 'no'}, desc={description}", flush=True)
 
-        if detections:
+        if detections or target_3d_direct:
             llm_result = result
             break
         elif attempt < MAX_LLM_RETRIES - 1:
@@ -198,29 +220,36 @@ async def find_and_fly_to_object(
             await send_status(f"Looking more carefully for '{query}'...")
             await asyncio.sleep(0.5)
 
-    if llm_result is None or not llm_result.get("detections"):
+    if llm_result is None or (not llm_result.get("detections") and not llm_result.get("target_3d")):
         await send_result(
             f"Sorry, I couldn't find '{query}' in the scene. Try a different description."
         )
         return
 
     description = llm_result.get("description", "Found object")
-    detections = llm_result["detections"]
 
-    # --- Step 3: Multi-view consensus localization ---
-    await send_status("Triangulating 3D position...")
+    # --- Step 3: Localize in 3D ---
+    if llm_result.get("target_3d"):
+        # box_3d path — Gemini gave us 3D coords directly
+        target_3d = np.array(llm_result["target_3d"])
+        n_views_found = 0
+        await send_status("Found it via 3D spatial detection!")
+        print(f"[Pipeline] box_3d target: {target_3d}", flush=True)
+    else:
+        # box_2d path — raycast to find 3D position
+        detections = llm_result["detections"]
+        await send_status("Triangulating 3D position...")
+        n_views_found = len(detections)
+        print(f"[Pipeline] Object detected in {n_views_found} views, running raycast", flush=True)
 
-    n_views_found = len(detections)
-    print(f"[Pipeline] Object detected in {n_views_found} views, running multi-view consensus", flush=True)
-
-    target_3d = localize_by_ray(
-        detections=detections,
-        viewpoints=valid_viewpoints,
-        points=points,
-        img_width=RENDER_WIDTH,
-        img_height=RENDER_HEIGHT,
-        fov_y=RENDER_FOV,
-    )
+        target_3d = localize_by_ray(
+            detections=detections,
+            viewpoints=valid_viewpoints,
+            points=points,
+            img_width=RENDER_WIDTH,
+            img_height=RENDER_HEIGHT,
+            fov_y=RENDER_FOV,
+        )
     print(f"[Pipeline] Target 3D position: {target_3d}", flush=True)
 
     # --- Step 4: Place 3D marker at target ---
@@ -263,9 +292,15 @@ async def find_and_fly_to_object(
         )
 
     # --- Step 5: Fly camera to the best viewing angle (always upright) ---
-    best_det = max(detections, key=lambda d: d.get("confidence", 0))
-    best_vp = valid_viewpoints[best_det["view_index"]]
-    view_dir = best_vp["position"] - target_3d
+    if detections:
+        best_det = max(detections, key=lambda d: d.get("confidence", 0))
+        best_vp = valid_viewpoints[best_det["view_index"]]
+        view_dir = best_vp["position"] - target_3d
+    else:
+        # box_3d path or no detections — pick nearest camera
+        dists = [np.linalg.norm(vp["position"] - target_3d) for vp in valid_viewpoints]
+        best_vp = valid_viewpoints[int(np.argmin(dists))]
+        view_dir = best_vp["position"] - target_3d
     # Flatten the view direction to be roughly horizontal so we approach from the side
     view_dir[2] = 0
     if np.linalg.norm(view_dir) < 1e-6:
@@ -278,22 +313,28 @@ async def find_and_fly_to_object(
     dest_look_at = target_3d
 
     start_pos = np.array(client.camera.position)
-    start_look_at = np.array(client.camera.look_at)
-
-    # Force upright orientation throughout the animation
-    client.camera.up_direction = (0.0, 0.0, 1.0)
+    start_wxyz = np.array(client.camera.wxyz)
+    dest_wxyz = look_at_wxyz(dest_pos, dest_look_at, up=np.array([0.0, 0.0, 1.0]))
 
     n_frames = int(FLY_DURATION * FLY_FPS)
     frame_dt = FLY_DURATION / n_frames
 
     for i in range(n_frames + 1):
         t = i / n_frames
-        pos, look = interpolate_camera(start_pos, start_look_at, dest_pos, dest_look_at, t)
+        if t < 0.5:
+            eased = 4 * t * t * t
+        else:
+            eased = 1 - (-2 * t + 2) ** 3 / 2
+        pos = start_pos + (dest_pos - start_pos) * eased
+        wxyz = _slerp(start_wxyz, dest_wxyz, eased)
         with client.atomic():
             client.camera.position = tuple(pos)
-            client.camera.look_at = tuple(look)
-            client.camera.up_direction = (0.0, 0.0, 1.0)
+            client.camera.wxyz = tuple(wxyz)
         await asyncio.sleep(frame_dt)
+
+    with client.atomic():
+        client.camera.wxyz = tuple(dest_wxyz)
+        client.camera.up_direction = (0.0, 0.0, 1.0)
 
     # --- Step 6: Pulse the marker ---
     if server is not None:
