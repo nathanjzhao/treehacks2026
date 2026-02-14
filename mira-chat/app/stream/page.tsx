@@ -452,13 +452,52 @@ export default function StreamPage() {
   const [input, setInput] = useState("");
   const [clock, setClock] = useState<Date | null>(null);
   const [liveMode, setLiveMode] = useState(false);
+  const [videoReady, setVideoReady] = useState(false);
+  const [videoError, setVideoError] = useState<string | null>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
+  const videoRef = useRef<HTMLVideoElement>(null);
   const pidRef = useRef(0);
 
   useEffect(() => {
     setClock(new Date());
     const t = setInterval(() => setClock(new Date()), 1000);
     return () => clearInterval(t);
+  }, []);
+
+  // Webcam video feed — swap this for Ray-Ban JPEG stream later
+  useEffect(() => {
+    let stream: MediaStream | null = null;
+    let cancelled = false;
+
+    async function startCamera() {
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: "environment", width: { ideal: 1920 }, height: { ideal: 1080 } },
+          audio: false,
+        });
+        if (cancelled) {
+          stream.getTracks().forEach((t) => t.stop());
+          return;
+        }
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+          setVideoReady(true);
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setVideoError(err instanceof Error ? err.message : "Camera not available");
+        }
+      }
+    }
+
+    startCamera();
+
+    return () => {
+      cancelled = true;
+      if (stream) {
+        stream.getTracks().forEach((t) => t.stop());
+      }
+    };
   }, []);
 
   useEffect(() => {
@@ -652,19 +691,33 @@ export default function StreamPage() {
         ::-webkit-scrollbar{width:3px}::-webkit-scrollbar-thumb{background:rgba(255,255,255,0.1);border-radius:3px}
       `}</style>
 
-      {/* ──── OUTDOOR SCENE BACKGROUND ──── */}
+      {/* ──── VIDEO BACKGROUND (webcam now, Ray-Ban stream later) ──── */}
       <div style={{ position: "absolute", inset: 0, zIndex: 0 }}>
-        {/* Sky gradient — warm outdoor daylight */}
-        <div style={{ position: "absolute", inset: 0, background: "linear-gradient(180deg, #3b5998 0%, #87CEEB 25%, #B0D4E8 45%, #8fbc8f 65%, #6B8E6B 80%, #4a6741 100%)" }} />
-        {/* Sun glow */}
-        <div style={{ position: "absolute", inset: 0, background: "radial-gradient(ellipse 50% 40% at 70% 15%, rgba(255,240,180,0.35) 0%, transparent 70%)" }} />
-        {/* Ground warmth */}
-        <div style={{ position: "absolute", bottom: 0, left: 0, right: 0, height: "40%", background: "linear-gradient(0deg, rgba(80,100,60,0.5) 0%, transparent 100%)" }} />
-        {/* Tree silhouette shapes */}
-        <div style={{ position: "absolute", left: "5%", top: "20%", width: "15%", height: "55%", background: "rgba(40,60,35,0.3)", borderRadius: "50% 50% 5% 5%", filter: "blur(4px)" }} />
-        <div style={{ position: "absolute", right: "8%", top: "15%", width: "12%", height: "60%", background: "rgba(35,55,30,0.25)", borderRadius: "50% 50% 5% 5%", filter: "blur(5px)" }} />
-        {/* Path/walkway */}
-        <div style={{ position: "absolute", bottom: 0, left: "30%", width: "40%", height: "30%", background: "linear-gradient(0deg, rgba(160,140,110,0.2) 0%, transparent 80%)", borderRadius: "50% 50% 0 0", filter: "blur(3px)" }} />
+        {/* Live camera feed */}
+        <video
+          ref={videoRef}
+          autoPlay
+          playsInline
+          muted
+          style={{
+            position: "absolute",
+            inset: 0,
+            width: "100%",
+            height: "100%",
+            objectFit: "cover",
+            display: videoReady ? "block" : "none",
+          }}
+        />
+        {/* Fallback gradient when camera not available */}
+        {!videoReady && (
+          <div style={{ position: "absolute", inset: 0, background: "linear-gradient(180deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%)" }}>
+            <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
+              <div style={{ textAlign: "center", color: "rgba(255,255,255,0.3)", fontFamily: "'DM Mono', monospace", fontSize: 12 }}>
+                {videoError ? `Camera: ${videoError}` : "Connecting camera..."}
+              </div>
+            </div>
+          </div>
+        )}
         {/* Lens vignette */}
         <div style={{ position: "absolute", inset: 0, boxShadow: "inset 0 0 150px 60px rgba(0,0,0,0.4)" }} />
         {/* Scanline */}
@@ -674,7 +727,7 @@ export default function StreamPage() {
         {/* Grid overlay */}
         <div style={{ position: "absolute", inset: 0, opacity: 0.03, backgroundImage: "linear-gradient(rgba(120,255,200,0.3) 1px, transparent 1px), linear-gradient(90deg, rgba(120,255,200,0.3) 1px, transparent 1px)", backgroundSize: "60px 60px", animation: "hud-grid-pulse 4s ease-in-out infinite" }} />
         {/* Film grain */}
-        <div style={{ position: "absolute", inset: 0, opacity: 0.1, mixBlendMode: "overlay", background: "url(\"data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E\")" }} />
+        <div style={{ position: "absolute", inset: 0, opacity: 0.08, mixBlendMode: "overlay", background: "url(\"data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E\")" }} />
       </div>
 
       <EscalationToast visible={showEscalation} />
@@ -723,7 +776,7 @@ export default function StreamPage() {
       {/* ──── TOP RIGHT: Clock ──── */}
       <div style={{ position: "absolute", top: 28, right: 56, zIndex: 10, textAlign: "right" }}>
         <div style={{ fontSize: 20, color: "rgba(255,255,255,0.8)", fontFamily: "'DM Mono', monospace", fontWeight: 500, letterSpacing: "0.05em" }}>{fmtClock(clock)}</div>
-        <div style={{ fontSize: 10, color: "rgba(255,255,255,0.3)", fontFamily: "'DM Mono', monospace", marginTop: 2 }}>CAM 01 \u00b7 1080p \u00b7 30fps</div>
+        <div style={{ fontSize: 10, color: videoReady ? "rgba(120,255,200,0.4)" : "rgba(255,255,255,0.3)", fontFamily: "'DM Mono', monospace", marginTop: 2 }}>{videoReady ? "CAM LIVE \u00b7 1080p" : "CAM \u00b7 NO SIGNAL"}</div>
       </div>
 
       {/* ──── TOP CENTER: Patient bar ──── */}
