@@ -23,7 +23,7 @@ def batch(
     box_threshold: float = 0.4,
 ):
     """Run Grounded SAM 2 tracking on all data/ videos in parallel."""
-    out_dir = pathlib.Path(__file__).parent / "examples"
+    out_dir = pathlib.Path(__file__).parent.parent / "data" / "groundedsam2"
     out_dir.mkdir(exist_ok=True)
 
     print(f"Launching {len(VIDEOS)} parallel tracking jobs")
