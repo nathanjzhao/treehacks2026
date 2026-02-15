@@ -29,6 +29,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.BugReport
+import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FloatingActionButton
@@ -72,6 +73,7 @@ fun StreamScreen(
   val streamUiState by streamViewModel.uiState.collectAsStateWithLifecycle()
   var showDebugConsole by remember { mutableStateOf(false) }
   var showSettings by remember { mutableStateOf(false) }
+  var showAudioSettings by remember { mutableStateOf(false) }
 
   LaunchedEffect(Unit) { streamViewModel.startStream() }
 
@@ -140,6 +142,20 @@ fun StreamScreen(
         )
       }
 
+      // Audio settings button (top-left, below settings)
+      androidx.compose.material3.FloatingActionButton(
+          onClick = { showAudioSettings = true },
+          modifier = Modifier
+              .align(Alignment.TopStart)
+              .padding(top = 128.dp),
+          containerColor = androidx.compose.material3.MaterialTheme.colorScheme.surface.copy(alpha = 0.8f)
+      ) {
+        androidx.compose.material3.Icon(
+            androidx.compose.material.icons.Icons.Default.Mic,
+            contentDescription = "Audio Settings"
+        )
+      }
+
       // Debug console button (top-right)
       androidx.compose.material3.FloatingActionButton(
           onClick = { showDebugConsole = true },
@@ -181,6 +197,13 @@ fun StreamScreen(
     StreamingSettingsScreen(
         streamViewModel = streamViewModel,
         onDismiss = { showSettings = false }
+    )
+  }
+
+  // Audio settings dialog
+  if (showAudioSettings) {
+    AudioSettingsScreen(
+        onNavigateBack = { showAudioSettings = false }
     )
   }
 }
