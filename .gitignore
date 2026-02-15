@@ -5,7 +5,6 @@ data/
 *.png
 *.mp4
 *.pyc
-*.ds_store
 __pycache__/
 explorer/debug_renders/
 depthanything/repo/

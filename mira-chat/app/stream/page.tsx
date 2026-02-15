@@ -778,10 +778,6 @@ export default function StreamPage() {
     let eventSource: EventSource | null = null;
     let retryTimeout: NodeJS.Timeout;
     const canvasRef = videoRef as React.RefObject<HTMLCanvasElement>;
-    let isRendering = false; // Track if we're currently rendering a frame
-    let pendingFrame: any = null; // Store the latest frame if one arrives while rendering
-    let framesReceived = 0;
-    let framesDropped = 0;
 
     function startStreamConnection() {
       if (cancelled) return;
@@ -846,57 +842,15 @@ export default function StreamPage() {
       const ctx = canvas.getContext("2d");
       if (!ctx) return;
 
-      framesReceived++;
-
-      // If already rendering, store this frame as pending and drop current
-      if (isRendering) {
-        pendingFrame = frameData;
-        framesDropped++;
-
-        // Log every 30 dropped frames
-        if (framesDropped % 30 === 0) {
-          console.log(`[Stream] Client-side frame dropping: ${framesDropped} frames dropped, ${framesReceived} received`);
-        }
-        return;
-      }
-
-      // Mark as rendering
-      isRendering = true;
-
       // Decode base64 JPEG
       const img = new Image();
       img.onload = () => {
-        // Only update canvas dimensions if they've changed (prevents unnecessary reflows)
-        if (canvas.width !== frameData.width) {
-          canvas.width = frameData.width;
-        }
-        if (canvas.height !== frameData.height) {
-          canvas.height = frameData.height;
-        }
-
-        // Draw frame to canvas
+        canvas.width = frameData.width;
+        canvas.height = frameData.height;
         ctx.drawImage(img, 0, 0);
-
-        // Mark as done rendering
-        isRendering = false;
-
-        // If a frame arrived while we were rendering, render it now
-        if (pendingFrame && !cancelled) {
-          const nextFrame = pendingFrame;
-          pendingFrame = null;
-          renderFrame(nextFrame);
-        }
       };
       img.onerror = (err) => {
         console.error("[Stream] Error loading frame image:", err);
-        isRendering = false;
-
-        // Try to render pending frame even if this one failed
-        if (pendingFrame && !cancelled) {
-          const nextFrame = pendingFrame;
-          pendingFrame = null;
-          renderFrame(nextFrame);
-        }
       };
       img.src = `data:image/jpeg;base64,${frameData.jpeg_base64}`;
     }
