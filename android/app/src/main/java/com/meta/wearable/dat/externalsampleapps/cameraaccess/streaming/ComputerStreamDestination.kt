@@ -37,9 +37,11 @@ class ComputerStreamDestination(
     private val TAG = "ComputerStream"
 
     private val client = OkHttpClient.Builder()
-        .connectTimeout(5, TimeUnit.SECONDS)
-        .writeTimeout(3, TimeUnit.SECONDS)
-        .readTimeout(3, TimeUnit.SECONDS)
+        .connectTimeout(2, TimeUnit.SECONDS)
+        .writeTimeout(10, TimeUnit.SECONDS)  // Increased for large frames
+        .readTimeout(2, TimeUnit.SECONDS)
+        .connectionPool(ConnectionPool(5, 30, TimeUnit.SECONDS))  // Connection pooling
+        .retryOnConnectionFailure(false)  // Don't auto-retry, we handle it
         .build()
 
     private var lastFrameTime = 0L
@@ -47,6 +49,17 @@ class ComputerStreamDestination(
 
     private val dateFormat = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.US).apply {
         timeZone = TimeZone.getTimeZone("UTC")
+    }
+
+    private var framesSent = 0
+    private var framesSkipped = 0
+
+    init {
+        android.util.Log.w(TAG, "🚀 ComputerStreamDestination initialized:")
+        android.util.Log.w(TAG, "   Target FPS: $targetFps")
+        android.util.Log.w(TAG, "   Frame Interval: ${frameIntervalMs}ms (1000ms / $targetFps)")
+        android.util.Log.w(TAG, "   JPEG Quality: $jpegQuality%")
+        android.util.Log.w(TAG, "   Endpoint: $endpoint:$port")
     }
 
     /**
@@ -62,10 +75,14 @@ class ComputerStreamDestination(
         // Frame rate limiting
         val now = System.currentTimeMillis()
         if (now - lastFrameTime < frameIntervalMs) {
-            StreamingLogger.debug(TAG, "Skipping frame #$frameNumber (rate limiting)")
+            framesSkipped++
+            if (framesSkipped % 30 == 0) {
+                android.util.Log.d(TAG, "⏭️ Rate limiter: Skipped $framesSkipped frames, sent $framesSent frames (targetFps=$targetFps)")
+            }
             return Result.success(Unit)
         }
         lastFrameTime = now
+        framesSent++
 
         StreamingLogger.debug(TAG, "Sending frame #$frameNumber (${frameData.size} bytes)")
 

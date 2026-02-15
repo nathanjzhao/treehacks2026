@@ -117,7 +117,8 @@ class VideoStreamingManager(
      * Enable computer streaming to specified endpoint
      */
     fun enableComputerStreaming(endpoint: String, port: Int, targetFps: Int = 7, jpegQuality: Int = 70) {
-        StreamingLogger.info(TAG, "Enabling computer streaming: $endpoint:$port @ ${targetFps}fps")
+        StreamingLogger.info(TAG, "Enabling computer streaming: $endpoint:$port @ ${targetFps}fps, quality=${jpegQuality}%")
+        android.util.Log.w(TAG, "⚠️ COMPUTER STREAMING CONFIG: targetFps=${targetFps}, jpegQuality=${jpegQuality}, endpoint=$endpoint:$port")
 
         // Cancel existing job if any
         computerJob?.cancel()
@@ -129,6 +130,7 @@ class VideoStreamingManager(
             targetFps = targetFps,
             jpegQuality = jpegQuality
         )
+        android.util.Log.i(TAG, "✅ ComputerStreamDestination created with targetFps=$targetFps")
 
         // Update status
         _statistics.update { it.copy(computerStatus = ConnectionStatus.CONNECTING) }

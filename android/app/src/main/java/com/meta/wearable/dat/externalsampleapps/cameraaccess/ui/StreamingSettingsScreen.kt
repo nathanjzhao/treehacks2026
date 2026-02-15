@@ -272,10 +272,24 @@ fun StreamingSettingsScreen(
                         style = MaterialTheme.typography.titleMedium
                     )
 
-                    Text(
-                        "Target FPS: ${targetFps.toInt()}",
-                        style = MaterialTheme.typography.bodyMedium
-                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            "Target FPS (Computer Stream)",
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                        Text(
+                            "${targetFps.toInt()} FPS",
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
+                            color = if (targetFps < 15) MaterialTheme.colorScheme.error
+                            else if (targetFps < 25) MaterialTheme.colorScheme.tertiary
+                            else MaterialTheme.colorScheme.primary
+                        )
+                    }
                     Slider(
                         value = targetFps,
                         onValueChange = { targetFps = it },
@@ -283,11 +297,19 @@ fun StreamingSettingsScreen(
                         steps = 28,
                         modifier = Modifier.fillMaxWidth()
                     )
-                    Text(
-                        "Higher FPS = better 3D reconstruction but more battery usage",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                    if (targetFps < 15) {
+                        Text(
+                            "⚠️ Low FPS setting detected! Increase to 25-30 for smooth streaming.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error
+                        )
+                    } else {
+                        Text(
+                            "Higher FPS = smoother video but more bandwidth. Recommended: 25-30 FPS.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
 
                     Spacer(modifier = Modifier.height(8.dp))
 
