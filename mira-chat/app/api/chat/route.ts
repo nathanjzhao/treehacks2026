@@ -1033,6 +1033,15 @@ export async function POST(request: NextRequest) {
         send({ type: "step", index: stepIndex, label, status, detail, searches });
         if (status === "active") {
           stepLabels.push(label);
+          // Fire-and-forget: write step event to Supabase for realtime listeners
+          appendEvent({
+            patient_id,
+            type: "CHAT_STEP",
+            severity: "GREEN",
+            receipt_text: label,
+            payload: { index: stepIndex, detail, searches },
+            source: "backend",
+          }).catch(() => {});
           stepIndex++;
         }
       };

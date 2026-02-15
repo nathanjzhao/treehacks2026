@@ -5,6 +5,7 @@ import { supabase, MiraEvent } from "@/lib/supabase/client";
 import { useDetection, DetectionOverlay } from "@/yolo";
 import { Streamdown } from "streamdown";
 import CitationCard from "@/app/components/CitationCard";
+import { consumeChatSSE } from "@/lib/sse-parser";
 
 /* ================================================================
    ACTION CHAINS — scripted demos for hackathon presentation
@@ -866,6 +867,10 @@ export default function StreamPage() {
     })();
 
     // Subscribe for new events
+    // Track live steps being accumulated from CHAT_STEP events
+    let liveMid: number | null = null;
+    const liveSteps: Step[] = [];
+
     const channel = supabase
       .channel("stream-mirror")
       .on(
@@ -880,60 +885,68 @@ export default function StreamPage() {
           const ev = payload.new as MiraEvent;
           if (ev.type === "CHAT_USER_UTTERANCE") {
             setMessages((p) => [...p, { role: "user", text: ev.receipt_text || "...", time: new Date(ev.created_at) }]);
+            // Start a new processing stepper for incoming steps
+            liveMid = ++pidRef.current;
+            liveSteps.length = 0;
+            setProcessing({ id: liveMid, steps: [], currentStep: 0, chain: { steps: [], reply: "", type: "info" }, finished: false });
+            setExpandedSteppers((p) => ({ ...p, [liveMid!]: true }));
+          } else if (ev.type === "CHAT_STEP") {
+            // Real-time step arriving — append to live stepper
+            const label = ev.receipt_text || "Processing...";
+            const pl = ev.payload as Record<string, unknown> | undefined;
+            const step: Step = {
+              label,
+              detail: pl?.detail as string | undefined,
+              searches: pl?.searches as string[] | undefined,
+              icon: mapStepToIcon(label),
+              duration: 0,
+            };
+            liveSteps.push(step);
+
+            if (liveMid === null) {
+              liveMid = ++pidRef.current;
+              setExpandedSteppers((p) => ({ ...p, [liveMid!]: true }));
+            }
+            const mid = liveMid;
+            const currentSteps = [...liveSteps];
+            setProcessing({
+              id: mid,
+              steps: currentSteps,
+              currentStep: currentSteps.length - 1,
+              chain: { steps: currentSteps, reply: "", type: "info" },
+              finished: false,
+            });
           } else if (ev.type === "CHAT_ASSISTANT_RESPONSE") {
             const pl = ev.payload as Record<string, unknown> | undefined;
-            const steps = (pl?.steps as string[]) || [];
+            const mid = liveMid ?? ++pidRef.current;
 
-            if (steps.length > 0) {
-              // Animate through steps in HUD stepper, then show reply
-              const mid = ++pidRef.current;
-              const hudSteps: Step[] = steps.map((label) => ({
-                label,
-                icon: mapStepToIcon(label),
-                duration: 400,
-              }));
-              setProcessing({ id: mid, steps: hudSteps, currentStep: 0, chain: { steps: hudSteps, reply: "", type: "info" }, finished: false });
-              setExpandedSteppers((p) => ({ ...p, [mid]: true }));
+            // Mark stepper as finished
+            const finalSteps = liveSteps.length > 0 ? [...liveSteps] : (pl?.steps as string[] || []).map((label: string) => ({
+              label,
+              icon: mapStepToIcon(label),
+              duration: 400,
+            }));
 
-              // Animate through steps with visible pacing
-              let si = 0;
-              const advance = () => {
-                if (si < hudSteps.length) {
-                  si++;
-                  setTimeout(() => {
-                    setProcessing((p) => (p && p.id === mid ? { ...p, currentStep: si } : p));
-                    advance();
-                  }, 800);
-                } else {
-                  setProcessing((p) => (p && p.id === mid ? { ...p, finished: true } : p));
-                  setTimeout(() => {
-                    setMessages((p) => [
-                      ...p,
-                      { role: "thinking" as const, steps: hudSteps, id: mid, time: new Date() },
-                      {
-                        role: "assistant" as const,
-                        text: ev.receipt_text || "...",
-                        type: pl?.action === "ESCALATE" ? "escalation" : pl?.action === "FIND_OBJECT" ? "object_found" : "info",
-                        citations: pl?.citations as AssistantMsg["citations"],
-                        time: new Date(ev.created_at),
-                      },
-                    ]);
-                    setExpandedSteppers((p) => ({ ...p, [mid]: false }));
-                    setProcessing(null);
-                  }, 2000);
-                }
-              };
-              advance();
-            } else {
-              // No steps — just show the reply
-              setMessages((p) => [...p, {
-                role: "assistant",
-                text: ev.receipt_text || "...",
-                type: pl?.action === "ESCALATE" ? "escalation" : pl?.action === "FIND_OBJECT" ? "object_found" : "info",
-                citations: pl?.citations as AssistantMsg["citations"],
-                time: new Date(ev.created_at),
-              }]);
-            }
+            setProcessing((p) => (p && p.id === mid ? { ...p, finished: true } : p));
+            setTimeout(() => {
+              setMessages((p) => [
+                ...p,
+                ...(finalSteps.length > 0 ? [{ role: "thinking" as const, steps: finalSteps as Step[], id: mid, time: new Date() }] : []),
+                {
+                  role: "assistant" as const,
+                  text: ev.receipt_text || "...",
+                  type: pl?.action === "ESCALATE" ? "escalation" : pl?.action === "FIND_OBJECT" ? "object_found" : "info",
+                  citations: pl?.citations as AssistantMsg["citations"],
+                  time: new Date(ev.created_at),
+                },
+              ]);
+              setExpandedSteppers((p) => ({ ...p, [mid]: false }));
+              setProcessing(null);
+            }, 1500);
+
+            // Reset live tracking
+            liveMid = null;
+            liveSteps.length = 0;
 
             if (pl?.action === "ESCALATE") {
               setShowEscalation(true);
@@ -1283,21 +1296,67 @@ export default function StreamPage() {
                   setSimulateInput("");
                   setMessages((p) => [...p, { role: "user", text: raw, time: new Date() }]);
                   localPendingRef.current = true;
-                  fetch("/api/chat", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ patient_id: DEMO_PATIENT_ID, message: raw }),
-                  })
-                    .then((res) => {
+
+                  // Use SSE stream so tool call steps show in real-time
+                  const mid = ++pidRef.current;
+                  const hudSteps: Step[] = [];
+                  setProcessing({ id: mid, steps: hudSteps, currentStep: 0, chain: { steps: hudSteps, reply: "", type: "info" }, finished: false });
+                  setExpandedSteppers((p) => ({ ...p, [mid]: true }));
+
+                  consumeChatSSE(DEMO_PATIENT_ID, raw, {
+                    onStep: (ev) => {
+                      hudSteps.push({
+                        label: ev.label,
+                        detail: ev.detail,
+                        searches: ev.searches,
+                        icon: mapStepToIcon(ev.label),
+                        duration: 0,
+                      });
+                      setProcessing((p) =>
+                        p && p.id === mid
+                          ? { ...p, steps: [...hudSteps], currentStep: hudSteps.length - 1 }
+                          : p
+                      );
+                    },
+                    onStepDone: (ev) => {
+                      setProcessing((p) =>
+                        p && p.id === mid
+                          ? { ...p, currentStep: Math.max(p.currentStep, ev.index + 1) }
+                          : p
+                      );
+                    },
+                    onText: () => {
+                      // text chunks arrive during streaming — we'll show the final reply via onResult
+                    },
+                    onResult: (ev) => {
                       localPendingRef.current = false;
-                      if (!res.ok) {
-                        res.text().then((t) => setSimulateError(`${res.status}: ${t.slice(0, 80)}`)).catch(() => setSimulateError(`${res.status} error`));
-                      }
-                    })
-                    .catch((err) => {
+                      setProcessing((p) => (p && p.id === mid ? { ...p, finished: true } : p));
+                      setTimeout(() => {
+                        setMessages((p) => [
+                          ...p,
+                          { role: "thinking" as const, steps: hudSteps, id: mid, time: new Date() },
+                          {
+                            role: "assistant" as const,
+                            text: ev.reply || "Done.",
+                            type: ev.action === "ESCALATE" ? "escalation" : ev.action === "FIND_OBJECT" ? "object_found" : "info",
+                            citations: ev.citations,
+                            time: new Date(),
+                          },
+                        ]);
+                        setExpandedSteppers((p) => ({ ...p, [mid]: false }));
+                        setProcessing(null);
+                        if (ev.action === "ESCALATE") {
+                          setShowEscalation(true);
+                          setTimeout(() => setShowEscalation(false), 4000);
+                        }
+                      }, 600);
+                    },
+                    onError: (err) => {
                       localPendingRef.current = false;
-                      setSimulateError(err instanceof Error ? err.message : "Request failed");
-                    });
+                      setProcessing(null);
+                      setSimulateError(err.message);
+                    },
+                  });
                 }
               }}
               style={{ display: "flex", flexDirection: "column", gap: 6 }}
