@@ -1,6 +1,8 @@
 # Mira - Assisted Living Intelligence
 
-Voice/text chat assistant + supervisor dashboard for assisted living facilities. Handles object finding (integrates with CV team), medical Q&A, and caregiver escalation.
+Voice/text chat assistant + supervisor dashboard for assisted living facilities. Part of the [Mira platform](../README.md) — an AI-powered system that combines 3D scene understanding with conversational AI to help elderly residents in daily living.
+
+Handles object finding (triggers the 3D CV pipeline to locate lost items), medical Q&A with clinical evidence grading, medication lookup, and caregiver escalation via Twilio SMS. Uses GPT-5-mini via OpenRouter with 5 function-calling tools. Voice input via Whisper STT, output via OpenAI TTS.
 
 ## Quick Start
 
@@ -19,7 +21,7 @@ npm run dev                  # http://localhost:3000
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Yes | Supabase anon/public key |
 | `SUPABASE_URL` | Yes | Same as above (for server) |
 | `SUPABASE_SERVICE_ROLE_KEY` | Yes | Supabase service role key |
-| `OPENROUTER_API_KEY` | Yes | OpenRouter API key (uses gpt-4o-mini) |
+| `OPENROUTER_API_KEY` | Yes | OpenRouter API key (uses GPT-5-mini) |
 | `TWILIO_ACCOUNT_SID` | No | Twilio account SID for SMS |
 | `TWILIO_AUTH_TOKEN` | No | Twilio auth token |
 | `TWILIO_PHONE_NUMBER` | No | Twilio sender number (E.164) |
@@ -36,8 +38,9 @@ Run these SQL files in your Supabase SQL Editor (Dashboard > SQL Editor), in ord
 ## Pages
 
 - `/` - Landing page
-- `/device` - Resident chat interface (voice + text)
-- `/dashboard` - Supervisor dashboard (patient management + event timeline)
+- `/device` - Resident chat interface (voice + text, Whisper STT → GPT-5-mini → OpenAI TTS)
+- `/dashboard` - Supervisor dashboard (patient list, real-time event timeline, alert banners, chat feed)
+- `/stream` - Security camera AR HUD (live RTSP/WebRTC feed with YOLOv8n object detection via ONNX Runtime Web)
 
 ## API Endpoints
 
