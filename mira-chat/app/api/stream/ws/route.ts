@@ -4,8 +4,16 @@ import frameStore, { FrameData } from "@/lib/frameStore";
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-// Store active streaming clients for frame broadcasts
-const streamingClients = new Set<ReadableStreamDefaultController>();
+// Store active streaming clients with per-client state for backpressure handling
+interface ClientState {
+  controller: ReadableStreamDefaultController;
+  lastFrameNumber: number;
+  skippedFrames: number;
+  connectedAt: number;
+  clientId: string;
+}
+
+const streamingClients = new Map<string, ClientState>();
 let frameCount = 0;
 let bytesReceived = 0;
 const connectedAt = Date.now();
@@ -22,7 +30,14 @@ export async function GET(req: NextRequest) {
   // Create streaming response
   const stream = new ReadableStream({
     start(controller) {
-      streamingClients.add(controller);
+      // Add client to map with initial state
+      streamingClients.set(clientId, {
+        controller,
+        lastFrameNumber: 0,
+        skippedFrames: 0,
+        connectedAt: Date.now(),
+        clientId,
+      });
 
       // Send initial connection message
       const initMsg = JSON.stringify({
@@ -34,8 +49,9 @@ export async function GET(req: NextRequest) {
 
       // Handle client disconnect
       req.signal.addEventListener("abort", () => {
-        streamingClients.delete(controller);
-        console.log(`[Stream] ${clientId} disconnected (${streamingClients.size} remaining)`);
+        const clientState = streamingClients.get(clientId);
+        streamingClients.delete(clientId);
+        console.log(`[Stream] ${clientId} disconnected (${streamingClients.size} remaining, skipped ${clientState?.skippedFrames || 0} frames)`);
         try {
           controller.close();
         } catch (e) {
@@ -57,26 +73,50 @@ export async function GET(req: NextRequest) {
 }
 
 /**
- * Broadcast frame to all connected streaming clients
+ * Broadcast frame to all connected streaming clients with adaptive frame dropping
  */
 function broadcastFrame(frame: FrameData) {
   const encoder = new TextEncoder();
+
+  // Encode base64 once for all clients (optimization)
+  const jpeg_base64 = frame.data.toString("base64");
+
   const message = JSON.stringify({
     type: "frame",
     timestamp: frame.timestamp,
     frame_number: frame.frameNumber,
     width: frame.width,
     height: frame.height,
-    jpeg_base64: frame.data.toString("base64"),
+    jpeg_base64,
   });
 
   const data = encoder.encode(`data: ${message}\n\n`);
 
-  streamingClients.forEach((controller) => {
+  // Broadcast with per-client frame dropping
+  const MAX_FRAME_LAG = 3; // Drop frames if client is >3 frames behind
+
+  streamingClients.forEach((clientState, clientId) => {
     try {
-      controller.enqueue(data);
+      // Calculate frame gap for this client
+      const frameGap = frame.frameNumber - clientState.lastFrameNumber;
+
+      // Drop frames if client is falling behind (prevents memory buildup)
+      if (frameGap > MAX_FRAME_LAG && clientState.lastFrameNumber > 0) {
+        clientState.skippedFrames++;
+
+        // Log every 10th skipped frame
+        if (clientState.skippedFrames % 10 === 0) {
+          console.log(`[Stream] ${clientId} falling behind: skipped ${clientState.skippedFrames} frames (gap: ${frameGap})`);
+        }
+        return; // Skip this frame for this client
+      }
+
+      // Send frame to client
+      clientState.controller.enqueue(data);
+      clientState.lastFrameNumber = frame.frameNumber;
     } catch (e) {
       // Client disconnected, will be removed by abort handler
+      console.warn(`[Stream] Failed to send frame to ${clientId}:`, e);
     }
   });
 }

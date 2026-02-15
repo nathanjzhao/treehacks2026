@@ -245,9 +245,12 @@ class StreamViewModel(
     // Convert I420 to NV21 format which is supported by Android's YuvImage
     val nv21 = convertI420toNV21(byteArray, videoFrame.width, videoFrame.height)
     val image = YuvImage(nv21, ImageFormat.NV21, videoFrame.width, videoFrame.height, null)
+
+    // Use lower quality for UI when streaming is enabled (saves compression time)
+    val uiQuality = if (_uiState.value.multiDestinationStreamingEnabled) 30 else 50
     val out =
         ByteArrayOutputStream().use { stream ->
-          image.compressToJpeg(Rect(0, 0, videoFrame.width, videoFrame.height), 50, stream)
+          image.compressToJpeg(Rect(0, 0, videoFrame.width, videoFrame.height), uiQuality, stream)
           stream.toByteArray()
         }
 
