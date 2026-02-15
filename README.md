@@ -25,8 +25,8 @@ Build 3D scene representations from video.
 
 | Module | What it does |
 |--------|-------------|
-| **[mapanything/](mapanything/)** | Video → dense colored point cloud (GLB). Facebook's Map Anything. |
-| **[openfungraph/](openfungraph/)** | Point cloud (RGBD) → scene graph. Builds a structured graph of objects and their relationships from a reconstructed scene. |
+| **[openfungraph/](openfungraph/)** | Video → 3D scene graph. End-to-end pipeline on Modal (A100). See [openfungraph/README.md](openfungraph/README.md). |
+| **[mapanything/](mapanything/)** | Standalone MapAnything viewer/runner. Facebook's Map Anything — video → dense depth, camera poses, point clouds. |
 
 ## Scratch / Experimental
 
@@ -45,7 +45,7 @@ Models explored but not in the main pipeline.
 | **[mira-chat/](mira-chat/)** | Chat interface. |
 | **[android/](android/)** | Android client app. |
 | **[vic-backend/](vic-backend/)** | Backend services. |
-| **[data/](data/)** | Reference videos (`.MOV`), reconstructed point clouds (`.glb`), and built reference maps. |
+| **[data/](data/)** | Reference videos (`.MOV`), scene graph outputs (`.json`), and built reference maps. |
 
 ## TODO
 
