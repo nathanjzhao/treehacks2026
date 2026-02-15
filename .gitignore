@@ -18,3 +18,5 @@ depthanything/repo/
 .env.production
 viser.md
 learning.md
+!assets/
+!assets/*.mp4
