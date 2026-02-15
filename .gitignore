@@ -9,9 +9,12 @@ __pycache__/
 explorer/debug_renders/
 depthanything/repo/
 
+
 # Environment variables (NEVER commit these!)
 .env
 .env.local
 .env.*.local
 .env.development
 .env.production
+viser.md
+learning.md
