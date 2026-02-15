@@ -262,7 +262,7 @@ def _untar_reference(tar_bytes: bytes) -> str:
 @app.function(
     image=hloc_image,
     gpu="A100",
-    timeout=120,
+    timeout=300,
     memory=16384,
 )
 def localize_frame(image_bytes: bytes, reference_tar: bytes) -> dict:
