@@ -26,13 +26,18 @@ export async function POST(request: NextRequest) {
 
     frameStore.setFrame(frameData);
 
+    // Log every 30th frame
+    if (frameNumber % 30 === 0) {
+      console.log(`[Frame] Stored frame #${frameNumber}, ${frameData.data.length} bytes, ${width}x${height}`);
+    }
+
     return NextResponse.json({
       success: true,
       frameNumber,
       size: frameData.data.length,
     });
   } catch (error) {
-    console.error("Frame upload error:", error);
+    console.error("[Frame] Upload error:", error);
     return NextResponse.json({ error: "Upload failed" }, { status: 500 });
   }
 }
