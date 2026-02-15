@@ -126,16 +126,23 @@ class AudioRecordingManager(
             }
 
             // Initialize services
+            StreamingLogger.info(TAG, "Initializing WhisperTranscriptionService...")
             whisperService = WhisperTranscriptionService(configuration.openaiApiKey)
+
+            StreamingLogger.info(TAG, "Initializing MiraChatService...")
+            StreamingLogger.info(TAG, "Mira base URL: ${configuration.miraBaseUrl}")
             miraChatService = MiraChatService(context, configuration.miraBaseUrl)
+            StreamingLogger.info(TAG, "MiraChatService initialized successfully")
 
             // Initialize passive context destination
             if (configuration.passiveContextEnabled) {
+                StreamingLogger.info(TAG, "Initializing passive context destination...")
                 audioStreamDestination = AudioStreamDestination(USER_ID)
                 audioStreamDestination?.connect()
             }
 
-            StreamingLogger.info(TAG, "Audio recording system initialized")
+            StreamingLogger.info(TAG, "Audio recording system initialized successfully")
+            StreamingLogger.info(TAG, "Patient ID: ${configuration.patientId}")
             return true
 
         } catch (e: Exception) {
@@ -394,10 +401,28 @@ class AudioRecordingManager(
      * Handle query result (wake word mode).
      */
     private suspend fun handleQueryResult(transcription: TranscriptionResult) {
+        StreamingLogger.info(TAG, "Handling query result: \"${transcription.text}\" (confidence: ${transcription.confidence})")
+
         _state.value = AudioCaptureState.SendingQuery(
             transcription.text,
             transcription.confidence
         )
+
+        // Check if Mira chat service is initialized
+        if (miraChatService == null) {
+            val errorMsg = "MiraChatService is null - not initialized properly"
+            StreamingLogger.error(TAG, errorMsg)
+            _state.value = AudioCaptureState.Error(errorMsg)
+            _stats.value = _stats.value.copy(
+                queriesFailed = _stats.value.queriesFailed + 1
+            )
+            resetRecording()
+            _state.value = AudioCaptureState.Listening
+            return
+        }
+
+        StreamingLogger.info(TAG, "Sending query to Mira at ${configuration.miraBaseUrl}")
+        StreamingLogger.info(TAG, "Patient ID: ${configuration.patientId}")
 
         // Send query to Mira
         val chatResult = miraChatService?.sendQuery(
@@ -407,6 +432,7 @@ class AudioRecordingManager(
 
         if (chatResult?.isSuccess == true) {
             val result = chatResult.getOrNull()!!
+            StreamingLogger.info(TAG, "Query successful! Reply: \"${result.reply}\"")
             _stats.value = _stats.value.copy(
                 queriesSent = _stats.value.queriesSent + 1
             )
@@ -416,7 +442,10 @@ class AudioRecordingManager(
             miraChatService?.playTTS(result.reply)
 
         } else {
-            StreamingLogger.error(TAG, "Query failed: ${chatResult?.exceptionOrNull()?.message}")
+            val errorMsg = chatResult?.exceptionOrNull()?.message ?: "Unknown error (chatResult is null)"
+            StreamingLogger.error(TAG, "Query failed: $errorMsg")
+            StreamingLogger.error(TAG, "Make sure Mira backend is running at ${configuration.miraBaseUrl}")
+            _state.value = AudioCaptureState.Error("Query failed: $errorMsg")
             _stats.value = _stats.value.copy(
                 queriesFailed = _stats.value.queriesFailed + 1
             )
