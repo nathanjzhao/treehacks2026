@@ -737,6 +737,7 @@ function mapStepToIcon(label: string): string {
 export default function StreamPage() {
   const [messages, setMessages] = useState<Msg[]>([]);
   const [processing, setProcessing] = useState<Processing | null>(null);
+  const [streamingText, setStreamingText] = useState("");
   const [expandedSteppers, setExpandedSteppers] = useState<Record<number, boolean>>({});
   const [listening, setListening] = useState(false);
   const [showEscalation, setShowEscalation] = useState(false);
@@ -748,6 +749,8 @@ export default function StreamPage() {
   const chatEndRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const pidRef = useRef(0);
+  // Track locally-initiated requests to avoid Supabase duplicate rendering
+  const localPendingRef = useRef(false);
   const [yoloEnabled, setYoloEnabled] = useState(true);
   const [viewSize, setViewSize] = useState({ w: 1920, h: 1080 });
 
@@ -805,7 +808,7 @@ export default function StreamPage() {
     };
   }, []);
 
-  // Supabase realtime — mirror device chat in live mode
+  // Supabase — load history + mirror user messages from other clients
   useEffect(() => {
     if (!liveMode) return;
 
@@ -837,7 +840,7 @@ export default function StreamPage() {
       }
     })();
 
-    // Subscribe for new events
+    // Subscribe for user messages from other clients (device, Android)
     const channel = supabase
       .channel("stream-mirror")
       .on(
@@ -850,74 +853,143 @@ export default function StreamPage() {
         },
         (payload) => {
           const ev = payload.new as MiraEvent;
+          // Skip events from our own pending request
+          if (localPendingRef.current) return;
+          // Only handle user utterances — step-stream handles assistant responses
           if (ev.type === "CHAT_USER_UTTERANCE") {
             setMessages((p) => [...p, { role: "user", text: ev.receipt_text || "...", time: new Date(ev.created_at) }]);
-          } else if (ev.type === "CHAT_ASSISTANT_RESPONSE") {
-            const pl = ev.payload as Record<string, unknown> | undefined;
-            const steps = (pl?.steps as string[]) || [];
-
-            if (steps.length > 0) {
-              // Animate through steps in HUD stepper, then show reply
-              const mid = ++pidRef.current;
-              const hudSteps: Step[] = steps.map((label) => ({
-                label,
-                icon: mapStepToIcon(label),
-                duration: 400,
-              }));
-              setProcessing({ id: mid, steps: hudSteps, currentStep: 0, chain: { steps: hudSteps, reply: "", type: "info" }, finished: false });
-              setExpandedSteppers((p) => ({ ...p, [mid]: true }));
-
-              // Animate through steps with visible pacing
-              let si = 0;
-              const advance = () => {
-                if (si < hudSteps.length) {
-                  si++;
-                  setTimeout(() => {
-                    setProcessing((p) => (p && p.id === mid ? { ...p, currentStep: si } : p));
-                    advance();
-                  }, 800);
-                } else {
-                  setProcessing((p) => (p && p.id === mid ? { ...p, finished: true } : p));
-                  setTimeout(() => {
-                    setMessages((p) => [
-                      ...p,
-                      { role: "thinking" as const, steps: hudSteps, id: mid, time: new Date() },
-                      {
-                        role: "assistant" as const,
-                        text: ev.receipt_text || "...",
-                        type: pl?.action === "ESCALATE" ? "escalation" : pl?.action === "FIND_OBJECT" ? "object_found" : "info",
-                        citations: pl?.citations as AssistantMsg["citations"],
-                        time: new Date(ev.created_at),
-                      },
-                    ]);
-                    setExpandedSteppers((p) => ({ ...p, [mid]: false }));
-                    setProcessing(null);
-                  }, 2000);
-                }
-              };
-              advance();
-            } else {
-              // No steps — just show the reply
-              setMessages((p) => [...p, {
-                role: "assistant",
-                text: ev.receipt_text || "...",
-                type: pl?.action === "ESCALATE" ? "escalation" : pl?.action === "FIND_OBJECT" ? "object_found" : "info",
-                citations: pl?.citations as AssistantMsg["citations"],
-                time: new Date(ev.created_at),
-              }]);
-            }
-
-            if (pl?.action === "ESCALATE") {
-              setShowEscalation(true);
-              setTimeout(() => setShowEscalation(false), 4000);
-            }
           }
+          // CHAT_ASSISTANT_RESPONSE is now handled by step-stream, skip here
         }
       )
       .subscribe();
 
     return () => {
       supabase.removeChannel(channel);
+    };
+  }, [liveMode]);
+
+  // Step-stream — real-time steps from in-memory bus (no DB delay)
+  useEffect(() => {
+    if (!liveMode) return;
+
+    let aborted = false;
+    const liveSteps: Step[] = [];
+    let replyText = "";
+    let activeMid = 0;
+
+    (async () => {
+      try {
+        const res = await fetch(`/api/step-stream?patient_id=${DEMO_PATIENT_ID}`);
+        if (!res.ok || !res.body) return;
+
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+
+        while (!aborted) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split("\n");
+          buffer = lines.pop() || "";
+
+          for (const line of lines) {
+            if (!line.startsWith("data: ")) continue;
+            const jsonStr = line.slice(6);
+            if (!jsonStr) continue;
+
+            try {
+              const event = JSON.parse(jsonStr);
+
+              switch (event.type) {
+                case "step": {
+                  // First step → initialize processing state
+                  if (liveSteps.length === 0) {
+                    activeMid = pidRef.current + 1;
+                    pidRef.current = activeMid;
+                    replyText = "";
+                    setProcessing({ id: activeMid, steps: [], currentStep: 0, chain: null, finished: false });
+                    setExpandedSteppers((p) => ({ ...p, [activeMid]: true }));
+                  }
+                  liveSteps.push({
+                    label: event.label,
+                    detail: event.detail,
+                    searches: event.searches,
+                    icon: mapStepToIcon(event.label),
+                    duration: 400,
+                  });
+                  setProcessing((p) =>
+                    p && p.id === activeMid
+                      ? { ...p, steps: [...liveSteps], currentStep: liveSteps.length - 1 }
+                      : p
+                  );
+                  break;
+                }
+                case "step_done": {
+                  setProcessing((p) =>
+                    p && p.id === activeMid
+                      ? { ...p, currentStep: liveSteps.length }
+                      : p
+                  );
+                  break;
+                }
+                case "text": {
+                  replyText += event.chunk;
+                  setStreamingText(replyText);
+                  break;
+                }
+                case "result": {
+                  const mid = activeMid;
+                  setProcessing((p) => (p && p.id === mid ? { ...p, finished: true } : p));
+                  const finalSteps = [...liveSteps];
+                  const finalReply = event.reply || replyText || "...";
+                  const finalAction = event.action || "ANSWER";
+                  const finalCitations = event.citations as AssistantMsg["citations"];
+
+                  setTimeout(() => {
+                    setStreamingText("");
+                    setMessages((p) => [
+                      ...p,
+                      ...(finalSteps.length > 0
+                        ? [{ role: "thinking" as const, steps: finalSteps, id: mid, time: new Date() }]
+                        : []),
+                      {
+                        role: "assistant" as const,
+                        text: finalReply,
+                        type: finalAction === "ESCALATE" ? "escalation" : finalAction === "FIND_OBJECT" ? "object_found" : "info",
+                        citations: finalCitations,
+                        time: new Date(),
+                      },
+                    ]);
+                    setExpandedSteppers((p) => ({ ...p, [mid]: false }));
+                    setProcessing(null);
+
+                    if (finalAction === "ESCALATE") {
+                      setShowEscalation(true);
+                      setTimeout(() => setShowEscalation(false), 4000);
+                    }
+                  }, 600);
+
+                  // Reset for next conversation
+                  liveSteps.length = 0;
+                  replyText = "";
+                  break;
+                }
+              }
+            } catch {
+              // skip malformed JSON
+            }
+          }
+        }
+      } catch (err) {
+        if (!aborted) console.error("[step-stream] connection error:", err);
+      }
+    })();
+
+    return () => {
+      aborted = true;
     };
   }, [liveMode]);
 
@@ -975,10 +1047,32 @@ export default function StreamPage() {
     advance();
   }, []);
 
+  const sendLive = useCallback(async (text: string) => {
+    if (!text.trim()) return;
+    setMessages((p) => [...p, { role: "user", text: text.trim(), time: new Date() }]);
+    setInput("");
+
+    // Mark as locally pending so Supabase subscription skips the duplicate user utterance
+    localPendingRef.current = true;
+
+    // Fire-and-forget — steps and result arrive via step-stream
+    fetch("/api/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ patient_id: DEMO_PATIENT_ID, message: text.trim() }),
+    })
+      .then(() => { localPendingRef.current = false; })
+      .catch(() => { localPendingRef.current = false; });
+  }, []);
+
   const send = useCallback((text: string) => {
-    if (!text.trim() || liveMode) return;
-    sendDemo(text);
-  }, [liveMode, sendDemo]);
+    if (!text.trim()) return;
+    if (liveMode) {
+      sendLive(text);
+    } else {
+      sendDemo(text);
+    }
+  }, [liveMode, sendLive, sendDemo]);
 
   const handleMic = () => {
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -1267,9 +1361,7 @@ export default function StreamPage() {
                   style={{
                     padding: "12px 18px",
                     borderRadius: isUser ? "14px 14px 4px 14px" : "14px 14px 14px 4px",
-                    background: isUser ? "rgba(0,0,0,0.55)" : "rgba(0,0,0,0.5)",
-                    backdropFilter: "blur(20px)",
-                    WebkitBackdropFilter: "blur(20px)",
+                    background: isUser ? "rgba(0,0,0,0.7)" : "rgba(0,0,0,0.65)",
                     border: `1px solid ${isUser ? "rgba(255,255,255,0.15)" : "rgba(120,255,200,0.2)"}`,
                     color: "rgba(255,255,255,0.95)",
                     fontSize: 17,
@@ -1307,6 +1399,40 @@ export default function StreamPage() {
           {processing && (
             <div className="hud-fadein">
               <HudStepper steps={processing.steps} currentStep={processing.currentStep} expanded={expandedSteppers[processing.id] ?? true} onToggle={() => toggle(processing.id)} finished={processing.finished} />
+            </div>
+          )}
+          {streamingText && (
+            <div className="hud-fadein" style={{ display: "flex", flexDirection: "column", alignItems: "flex-start" }}>
+              <div
+                className="hud-label"
+                style={{
+                  fontSize: 11,
+                  color: "rgba(120,255,200,0.7)",
+                  fontFamily: "'DM Mono', monospace",
+                  fontWeight: 600,
+                  marginBottom: 3,
+                  padding: "0 6px",
+                  letterSpacing: "0.05em",
+                }}
+              >
+                MIRA
+              </div>
+              <div
+                style={{
+                  padding: "12px 18px",
+                  borderRadius: "14px 14px 14px 4px",
+                  background: "rgba(0,0,0,0.65)",
+                  border: "1px solid rgba(120,255,200,0.2)",
+                  color: "rgba(255,255,255,0.95)",
+                  fontSize: 17,
+                  fontWeight: 600,
+                  lineHeight: 1.6,
+                  maxWidth: "95%",
+                  textShadow: "0 1px 3px rgba(0,0,0,0.6)",
+                }}
+              >
+                <Streamdown>{streamingText}</Streamdown>
+              </div>
             </div>
           )}
           <div ref={chatEndRef} />
