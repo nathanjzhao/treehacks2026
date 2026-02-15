@@ -1,18 +1,10 @@
 # Mira — TreeHacks 2026
 
-**AI-powered assisted living platform** that combines 3D scene understanding with a conversational AI assistant to help elderly residents find lost objects, answer medical questions, and escalate emergencies to caregivers.
+**An AI companion on smart glasses that understands your home in 3D.** When a dementia patient says "where are my pills?", Mira actually finds them.
 
-A resident says "Where are my glasses?" → the system reconstructs their room in 3D, locates the object via multi-view Gemini 3 Flash vision + raycasting, and guides them to it — while a supervisor dashboard tracks everything in real-time.
+Voice-first assisted living platform combining 3D scene understanding, medical knowledge, and real-time caregiver alerts. Runs on Ray-Ban Meta glasses.
 
-### Core Pipeline
-
-1. **3D Reconstruction** — Video → dense point cloud + camera poses (MapAnything / VGGT on Modal A100s)
-2. **Object Finding** — Natural language query → Gemini 3 Flash multi-view detection → raycast into point cloud → 3D coordinates
-3. **Camera Localization** — Live camera frame → 6DoF pose in the reconstructed scene (SuperPoint + LightGlue + PnP)
-4. **Conversational AI** — Voice/text chat (GPT-5-mini via OpenRouter) with function calling for object search, medical Q&A, medication lookup, and caregiver escalation
-5. **Real-time Dashboard** — Supabase Realtime event spine powering a supervisor view of all patients, alerts, and activity
-
-**Tech Stack:** Next.js 15 · React 19 · Tailwind CSS · Supabase (Postgres + Realtime) · OpenRouter (GPT-5-mini, Gemini 3 Flash) · Whisper STT · OpenAI TTS · Twilio SMS · Modal (A100 GPU) · Viser · ONNX Runtime Web · Python · FastAPI
+**Tech Stack:** Next.js · React · Tailwind CSS · Supabase (Postgres + Realtime) · OpenRouter · Whisper STT · OpenAI TTS · Modal (A100 GPU) · Viser · ONNX Runtime Web · Python · FastAPI
 
 ## System Architecture
 
@@ -27,49 +19,51 @@ A resident says "Where are my glasses?" → the system reconstructs their room i
 | `1` / `2` | Switch EXPLORE / DATA FLOW mode |
 | `←` / `→` | Skip between data flow paths |
 
-## Camera Localization
+## Modules
 
-Determine where a camera is in a previously reconstructed 3D scene.
+### 3D Reconstruction
 
 | Module | What it does |
 |--------|-------------|
-| **[hloc_localization/](hloc_localization/)** | Visual localization via SuperPoint + LightGlue + PnP. Builds an SfM reference map from video (Modal GPU), then localizes new frames against it in 6DoF. ~10-20fps. |
+| **[scenegraph/](scenegraph/)** | Video → 3D scene graph. End-to-end pipeline on Modal (A100): structure-from-motion, Grounding DINO object detection per frame, backprojection into 3D via depth maps + camera poses, geometric overlap + CLIP similarity merging into a Scene Object Graph. See [scenegraph/README.md](scenegraph/README.md). |
+| **[reconstruction/](reconstruction/)** | Dense 3D reconstruction — video → dense depth, camera poses, point clouds. |
 
-## Object Localization
+### Camera Localization
 
-Find and segment objects in a frame, then estimate their 3D position.
+| Module | What it does |
+|--------|-------------|
+| **[hloc_localization/](hloc_localization/)** | Visual localization via SuperPoint + LightGlue + PnP. Builds an SfM reference map from video (Modal GPU), then localizes new frames against it in 6DoF. Live pose tracking uses DPVO for continuous 6DoF with periodic HLoc re-localization to correct drift. |
+
+### Object Localization
 
 | Module | What it does |
 |--------|-------------|
 | **[segmentation/](segmentation/)** | Image + language query → object segmentation. Open-vocabulary detection and mask generation. |
-| **[depthanything/](depthanything/)** | Monocular depth estimation per frame. Used to get depth of objects segmented by SAM — use median/trimmed mean since mask edges bleed into background depth. |
+| **[depthanything/](depthanything/)** | Monocular depth estimation per frame. Used to get depth of segmented objects — median/trimmed mean since mask edges bleed into background. |
 
-## 3D Reconstruction
-
-Build 3D scene representations from video.
+### Apps & Services
 
 | Module | What it does |
 |--------|-------------|
-| **[scenegraph/](scenegraph/)** | Video → 3D scene graph. End-to-end pipeline on Modal (A100). See [scenegraph/README.md](scenegraph/README.md). |
-| **[reconstruction/](reconstruction/)** | Dense 3D reconstruction — video → dense depth, camera poses, point clouds. |
-
-## Scratch / Experimental
-
-Models explored but not in the main pipeline.
-
-| Module | What it does |
-|--------|-------------|
-| **[vggt/](vggt/)** | Facebook's VGGT — video → point cloud + camera poses. Similar to MapAnything but different approach. |
-| **[sam3/](sam3/)** | Facebook's SAM 3 — image + language → segmentation. Similar to Grounded SAM 2. |
-
-## Other
-
-| Module | What it does |
-|--------|-------------|
-| **[explorer/](explorer/)** | Interactive 3D point cloud viewer (Viser + FastAPI). Natural language query → Gemini 3 Flash multi-view detection → raycast into point cloud → animated camera fly-to. Auto-detects scene orientation on load. |
-| **[mira-chat/](mira-chat/)** | Full-stack Next.js app — resident voice/text chat (GPT-5-mini + function calling), supervisor dashboard with real-time event timeline, object finding integration, caregiver escalation via Twilio SMS. See [mira-chat/README.md](mira-chat/README.md). |
-| **[securitycam/](securitycam/)** | Security camera streaming — mediamtx config for RTMP/RTSP/HLS/WebRTC ingestion from IP cameras or phones. |
-| **[android/](android/)** | Android client app with AR overlay. |
+| **[explorer/](explorer/)** | Interactive 3D point cloud viewer (Viser + FastAPI). Natural language query → Gemini multi-view detection → raycast into point cloud → animated camera fly-to. Auto-detects scene orientation via Gemini rotation voting. |
+| **[mira-chat/](mira-chat/)** | Full-stack Next.js app — resident voice/text chat (LLM + function calling for spatial nav, medical Q&A, medication lookup), supervisor dashboard with real-time event timeline, caregiver escalation via email. Supabase Realtime for zero-polling updates. See [mira-chat/README.md](mira-chat/README.md). |
+| **[android/](android/)** | Android client app — receives Bluetooth audio + JPEG frames from Ray-Ban Meta glasses, bridges to backend via Tailscale. |
+| **[securitycam/](securitycam/)** | Security camera streaming — mediamtx config for RTMP/RTSP/HLS/WebRTC ingestion. |
 | **[vic-backend/](vic-backend/)** | Backend services. |
 | **[backendviewer/](backendviewer/)** | Interactive architecture flowchart with animated data flow visualization and video demos. |
-| **[data/](data/)** | Reference videos (`.MOV`), scene graph outputs (`.json`), and built reference maps. |
+
+## Inspiration
+
+Three of us have grandparents with Alzheimer's or dementia. If you've been around it, you know the loop: "Have you seen my pills?" five times in an afternoon. It's not just forgetting — it's the loss of autonomy, the slow erosion of someone's confidence that they can manage their own life.
+
+Many dementia patients refuse traditional care, insisting family handle everything, which puts enormous strain on people who can't be present 24/7. Mira is designed for this gap: asynchronous monitoring without pulling out a phone, assistance at 3 AM, and a caregiver dashboard that keeps family informed.
+
+For someone with Alzheimer's, a searchable spatial memory isn't a convenience. It's dignity.
+
+## What's Next
+
+- **Continuous scene updates.** The 3D model is currently from a one-time walkthrough. Objects move. The system should update incrementally as the resident goes about their day.
+- **Predictive object tracking.** If the event log shows someone leaves their glasses in the fridge every Tuesday, the system should learn that and check there first.
+- **Dedicated sensor hardware.** Ray-Bans don't expose IMU data, so fall detection needs external hardware — a wearable with accelerometer and gyroscope combined with 3D scene context.
+- **Health device integration.** Apple Watch vitals, cameras in common areas, other health peripherals feeding into the same event stream.
+- **Scaling point clouds.** One room works. A full facility requires procedural rendering and level-of-detail management for very large point clouds.
