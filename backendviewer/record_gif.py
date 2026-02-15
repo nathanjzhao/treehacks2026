@@ -24,7 +24,7 @@ WIDTH = 1920
 HEIGHT = 1080
 FPS = 12
 FRAME_DELAY_MS = 1000 // FPS
-DURATION_SEC = 45
+DURATION_SEC = 60
 OUTPUT = Path(__file__).parent / "flowchart_dataflow.gif"
 HTML_PATH = Path(__file__).parent / "flowchart.html"
 SERVE_DIR = Path(__file__).parent
@@ -53,9 +53,12 @@ async def main():
         # Wait for entrance animations
         await asyncio.sleep(3)
 
+        # Slow down flow animation for recording (2x slower)
+        await page.evaluate("window.flowSpeedMultiplier = 2")
+
         # Switch to data flow mode
         await page.keyboard.press("2")
-        # Hide mode toggle and flow nav UI for clean recording
+        # Hide mode toggle UI for clean recording
         await page.evaluate("""() => {
             const toggle = document.querySelector('.mode-toggle');
             if (toggle) toggle.style.display = 'none';
