@@ -64,8 +64,14 @@
     transform: translateX(0);
     transition: transform 0.5s cubic-bezier(0.4, 0, 0.2, 1);
   }
-  body.video-open .chart-container {
+  body.video-shift-default .chart-container {
     transform: translateX(calc(-25vw + 100px));
+  }
+  body.video-shift-none .chart-container {
+    transform: translateX(0);
+  }
+  body.video-shift-far .chart-container {
+    transform: translateX(calc(-25vw - 40px));
   }
 
   svg.edges {
@@ -541,11 +547,6 @@
     <span class="icon">👁️</span>
     <span class="label">Live Object Tracking</span>
   </div>
-  <div class="node glow-green" id="obj-state" style="left:610px; top:550px; width:160px;">
-    <span class="icon">🔄</span>
-    <span class="label">Live Object State</span>
-    <span class="sub">dynamic positions</span>
-  </div>
 
   <div class="node glow-purple" id="stt" style="left:1050px; top:220px; width:130px;">
     <span class="icon">🗣️</span>
@@ -645,7 +646,7 @@ const edges = [
   ['depth', 'obj-track', 'solid', null],
   ['masks', 'obj-track', 'solid', null],
   ['pose', 'obj-track', 'data', '#22c55e'],
-  ['obj-track', 'obj-state', 'solid', null],
+  ['obj-track', 'tool-nav', 'data', '#22c55e'],
 
   // Mic → STT
   ['mic', 'stt', 'solid', null],
@@ -659,7 +660,7 @@ const edges = [
 
   // Online → Agent
   ['pose', 'tool-nav', 'data', '#22c55e'],
-  ['obj-state', 'tool-nav', 'data', '#22c55e'],
+  ['obj-track', 'caretaker-view', 'data', '#22c55e'],
   ['objdb', 'tool-nav', 'data', '#3b82f6'],
   ['recon', 'tool-nav', 'data', '#3b82f6'],
 
@@ -683,7 +684,6 @@ const edges = [
   // Caretaker feeds
   ['recon', 'caretaker-view', 'data', '#3b82f6'],
   ['pose', 'caretaker-view', 'data', '#22c55e'],
-  ['obj-state', 'caretaker-view', 'data', '#22c55e'],
   ['tool-patient', 'caretaker-view', 'data', '#a855f7'],
   ['llm', 'caretaker-view', 'data', '#a855f7'],
 ];
@@ -691,7 +691,7 @@ const edges = [
 const pipelineGroups = {
   hardware: ['glasses', 'video', 'mic'],
   offline: ['recon', 'objdet', 'refimg', 'objdb'],
-  online: ['dpvo', 'hloc', 'depth', 'masks', 'obj-track', 'pose', 'obj-state', 'stt'],
+  online: ['dpvo', 'hloc', 'depth', 'masks', 'obj-track', 'pose', 'stt'],
   agent: ['llm', 'tool-nav', 'tool-patient', 'tool-med', 'response', 'tts'],
   views: ['patient-view', 'caretaker-view'],
 };
@@ -949,7 +949,7 @@ const flowPaths = [
   },
   {
     name: 'Video → Depth + Masks + Pose → Object Tracking → Live State',
-    nodes: ['glasses', 'video', 'depth', 'masks', 'obj-track', 'obj-state'],
+    nodes: ['glasses', 'video', 'depth', 'masks', 'obj-track'],
   },
   {
     name: 'Voice → Speech-to-Text → LLM Agent → Response → TTS → Patient',
@@ -1201,12 +1201,12 @@ setTimeout(() => { edgeSvg.style.opacity = '1'; }, 600);
 
 // ── Video Preview on Node Highlight ──
 const nodeVideoMap = {
-  'depth':     { src: 'assets/depth-map.mp4',              label: 'Depth Map' },
-  'masks':     { src: 'assets/IMG_4723_tracked_h264.mp4', label: 'Object Masks' },
-  'obj-track': { src: 'assets/IMG_4723_composite_2x.mp4', label: 'Live Object Tracking' },
-  'recon':     { src: 'assets/3d-reconstruction.mov',     label: '3D Reconstruction' },
-  'pose':      { src: 'assets/6dof-user-pose.mp4',        label: '6DoF User Pose', speed: 2 },
-  'objdb':     { src: 'assets/3d-scene-object-graph.mov', label: '3D Scene Object Graph' },
+  'depth':     { src: 'assets/depth-map.mp4',              label: 'Depth Map',              shift: 'default' },
+  'masks':     { src: 'assets/IMG_4723_tracked_h264.mp4', label: 'Object Masks',           shift: 'default' },
+  'obj-track': { src: 'assets/IMG_4723_composite_2x.mp4', label: 'Live Object Tracking',   shift: 'default' },
+  'recon':     { src: 'assets/3d-reconstruction.mov',     label: '3D Reconstruction',      shift: 'none' },
+  'pose':      { src: 'assets/6dof-user-pose.mp4',        label: '6DoF User Pose', speed: 2, shift: 'far' },
+  'objdb':     { src: 'assets/3d-scene-object-graph.mov', label: '3D Scene Object Graph',  shift: 'none' },
 };
 
 Object.keys(nodeVideoMap).forEach(id => {
@@ -1228,7 +1228,8 @@ function showVideoPreview(nodeId) {
   previewVideo.playbackRate = mapping.speed || 1;
   previewVideo.play().catch(() => {});
   videoPreview.classList.add('visible');
-  document.body.classList.add('video-open');
+  document.body.classList.remove('video-shift-default', 'video-shift-none', 'video-shift-far');
+  document.body.classList.add('video-shift-' + (mapping.shift || 'default'));
   // Auto-scroll to keep the active node visible in the left half
   setTimeout(() => {
     const el = document.getElementById(nodeId);
@@ -1240,7 +1241,7 @@ function hideVideoPreview() {
   if (!activeVideoNode) return;
   activeVideoNode = null;
   videoPreview.classList.remove('visible');
-  document.body.classList.remove('video-open');
+  document.body.classList.remove('video-shift-default', 'video-shift-none', 'video-shift-far');
   previewVideo.pause();
   previewVideo.removeAttribute('src');
   previewVideo.load();
