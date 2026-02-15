@@ -66,7 +66,11 @@ class MiraChatService(
         message: String
     ): Result<MiraChatResult> = withContext(Dispatchers.IO) {
         try {
-            StreamingLogger.info(TAG, "Sending query to Mira: \"$message\"")
+            val url = "$miraBaseUrl/api/chat"
+            StreamingLogger.info(TAG, "=== SENDING QUERY TO MIRA ===")
+            StreamingLogger.info(TAG, "URL: $url")
+            StreamingLogger.info(TAG, "Patient ID: $patientId")
+            StreamingLogger.info(TAG, "Message: \"$message\"")
 
             // Create request body
             val requestJson = """{"patient_id":"$patientId","message":"$message"}"""
@@ -74,18 +78,24 @@ class MiraChatService(
 
             // Create request
             val request = Request.Builder()
-                .url("$miraBaseUrl/api/chat")
+                .url(url)
                 .post(requestBody)
                 .build()
+
+            StreamingLogger.info(TAG, "Executing HTTP request...")
 
             // Execute request
             val response = client.newCall(request).execute()
 
+            StreamingLogger.info(TAG, "Response received: HTTP ${response.code}")
+
             if (!response.isSuccessful) {
                 val errorBody = response.body?.string() ?: "Unknown error"
-                StreamingLogger.error(TAG, "Query failed: HTTP ${response.code} - $errorBody")
+                StreamingLogger.error(TAG, "=== QUERY FAILED ===")
+                StreamingLogger.error(TAG, "HTTP ${response.code} - $errorBody")
+                StreamingLogger.error(TAG, "URL: $url")
                 return@withContext Result.failure(
-                    Exception("Query failed: HTTP ${response.code}")
+                    Exception("Query failed: HTTP ${response.code} - $errorBody")
                 )
             }
 
@@ -141,6 +151,7 @@ class MiraChatService(
             }
 
             if (reply.isEmpty()) {
+                StreamingLogger.error(TAG, "No reply received from Mira after parsing SSE stream")
                 return@withContext Result.failure(Exception("No reply received from Mira"))
             }
 
@@ -152,10 +163,18 @@ class MiraChatService(
                 steps = steps
             )
 
+            StreamingLogger.info(TAG, "=== QUERY SUCCESS ===")
+            StreamingLogger.info(TAG, "Reply: \"$reply\"")
+            StreamingLogger.info(TAG, "Action: $action")
+
             Result.success(result)
 
         } catch (e: Exception) {
-            StreamingLogger.error(TAG, "Query error: ${e.message}")
+            StreamingLogger.error(TAG, "=== QUERY EXCEPTION ===")
+            StreamingLogger.error(TAG, "Exception: ${e.javaClass.simpleName}")
+            StreamingLogger.error(TAG, "Message: ${e.message}")
+            StreamingLogger.error(TAG, "URL: $miraBaseUrl/api/chat")
+            e.printStackTrace()
             Result.failure(e)
         }
     }
