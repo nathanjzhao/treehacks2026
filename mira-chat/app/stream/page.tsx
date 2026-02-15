@@ -772,21 +772,50 @@ export default function StreamPage() {
   // Ray-Ban Android MJPEG stream
   useEffect(() => {
     let cancelled = false;
+    let retryTimeout: NodeJS.Timeout;
 
     function startAndroidStream() {
       if (videoRef.current && !cancelled) {
-        // Set MJPEG stream as video source
-        videoRef.current.src = "/api/stream/mjpeg";
-        videoRef.current.onloadeddata = () => {
+        console.log("[Stream] Connecting to MJPEG stream...");
+
+        const imgElement = videoRef.current as HTMLImageElement;
+
+        // Set MJPEG stream as image source
+        imgElement.src = "/api/stream/mjpeg";
+
+        imgElement.onload = () => {
           if (!cancelled) {
+            console.log("[Stream] MJPEG stream connected and ready");
             setVideoReady(true);
+            setVideoError(null);
           }
         };
-        videoRef.current.onerror = (err) => {
+
+        imgElement.onerror = (err) => {
           if (!cancelled) {
-            setVideoError("Android stream not available - check connection");
+            console.error("[Stream] Image error:", err);
+            setVideoError("Android stream not available - retrying...");
+
+            // Retry after 2 seconds
+            retryTimeout = setTimeout(() => {
+              if (!cancelled) {
+                console.log("[Stream] Retrying connection...");
+                startAndroidStream();
+              }
+            }, 2000);
           }
         };
+
+        // Set a loading timeout - if not loaded after 5 seconds, retry
+        const loadTimeout = setTimeout(() => {
+          if (!cancelled && !videoReady) {
+            console.log("[Stream] Loading timeout, retrying...");
+            imgElement.src = "";
+            setTimeout(() => startAndroidStream(), 500);
+          }
+        }, 5000);
+
+        return () => clearTimeout(loadTimeout);
       }
     }
 
@@ -794,11 +823,12 @@ export default function StreamPage() {
 
     return () => {
       cancelled = true;
+      clearTimeout(retryTimeout);
       if (videoRef.current) {
-        videoRef.current.src = "";
+        (videoRef.current as HTMLImageElement).src = "";
       }
     };
-  }, []);
+  }, [videoReady]);
 
   // Supabase realtime — mirror device chat in live mode
   useEffect(() => {
@@ -1040,12 +1070,10 @@ export default function StreamPage() {
 
       {/* ──── VIDEO BACKGROUND (Ray-Ban Android stream) ──── */}
       <div style={{ position: "absolute", inset: 0, zIndex: 0 }}>
-        {/* Live camera feed */}
-        <video
-          ref={videoRef}
-          autoPlay
-          playsInline
-          muted
+        {/* Live MJPEG stream from Ray-Ban via Android */}
+        <img
+          ref={videoRef as any}
+          alt="Ray-Ban stream"
           style={{
             position: "absolute",
             inset: 0,

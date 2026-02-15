@@ -86,6 +86,20 @@ class VideoStreamingManager(
     private val droppedFrameCounter = AtomicInteger(0)
     private val startTime = AtomicLong(0)
 
+    // Per-destination frame counters for FPS calculation
+    private val computerFrameCounter = AtomicInteger(0)
+    private val cloudFrameCounter = AtomicInteger(0)
+    private val lastComputerFrameCount = AtomicInteger(0)
+    private val lastCloudFrameCount = AtomicInteger(0)
+
+    // Bandwidth tracking
+    private val computerBytesTransferred = AtomicLong(0)
+    private val lastComputerBytes = AtomicLong(0)
+
+    // Latency tracking (moving average)
+    private val computerLatencySum = AtomicLong(0)
+    private val computerLatencyCount = AtomicInteger(0)
+
     private val _statistics = MutableStateFlow(StreamingStats())
     val statistics: StateFlow<StreamingStats> = _statistics.asStateFlow()
 
@@ -123,6 +137,8 @@ class VideoStreamingManager(
         computerJob = coroutineScope.launch(Dispatchers.IO) {
             try {
                 computerFrameFlow.collect { frameData ->
+                    val sendStartTime = System.currentTimeMillis()
+
                     computerDestination?.sendFrame(
                         frameData = frameData.data,
                         width = frameData.width,
@@ -130,6 +146,16 @@ class VideoStreamingManager(
                         timestamp = frameData.timestamp,
                         frameNumber = frameData.frameNumber
                     )?.onSuccess {
+                        val latency = System.currentTimeMillis() - sendStartTime
+
+                        // Update counters
+                        computerFrameCounter.incrementAndGet()
+                        computerBytesTransferred.addAndGet(frameData.data.size.toLong())
+
+                        // Track latency (simple moving average)
+                        computerLatencySum.addAndGet(latency)
+                        computerLatencyCount.incrementAndGet()
+
                         _statistics.update { it.copy(computerStatus = ConnectionStatus.CONNECTED) }
                     }?.onFailure { error ->
                         StreamingLogger.error(TAG, "Computer streaming error: ${error.message}")
@@ -151,7 +177,20 @@ class VideoStreamingManager(
         computerJob?.cancel()
         computerJob = null
         computerDestination = null
-        _statistics.update { it.copy(computerStatus = ConnectionStatus.DISCONNECTED, computerFps = 0f) }
+
+        // Reset counters
+        computerFrameCounter.set(0)
+        lastComputerFrameCount.set(0)
+        computerBytesTransferred.set(0)
+        lastComputerBytes.set(0)
+        computerLatencySum.set(0)
+        computerLatencyCount.set(0)
+
+        _statistics.update { it.copy(
+            computerStatus = ConnectionStatus.DISCONNECTED,
+            computerFps = 0f,
+            computerLatency = 0
+        ) }
     }
 
     /**
@@ -186,6 +225,7 @@ class VideoStreamingManager(
                             height = frameData.height,
                             timestamp = frameData.timestamp
                         )?.onSuccess {
+                            cloudFrameCounter.incrementAndGet()
                             _statistics.update { it.copy(cloudStatus = ConnectionStatus.CONNECTED) }
                         }?.onFailure { error ->
                             StreamingLogger.error(TAG, "Cloud streaming error: ${error.message}")
@@ -267,9 +307,30 @@ class VideoStreamingManager(
 
                 val uptime = (System.currentTimeMillis() - startTime.get()) / 1000
 
+                // Calculate FPS (frames sent in the last second)
+                val currentComputerFrames = computerFrameCounter.get()
+                val computerFps = (currentComputerFrames - lastComputerFrameCount.getAndSet(currentComputerFrames)).toFloat()
+
+                val currentCloudFrames = cloudFrameCounter.get()
+                val cloudFps = (currentCloudFrames - lastCloudFrameCount.getAndSet(currentCloudFrames)).toFloat()
+
+                // Calculate bandwidth (KB/s)
+                val currentBytes = computerBytesTransferred.get()
+                val bytesPerSecond = currentBytes - lastComputerBytes.getAndSet(currentBytes)
+                val bandwidthKBps = bytesPerSecond / 1024f
+
+                // Calculate average latency
+                val latencyCount = computerLatencyCount.getAndSet(0)
+                val latencySum = computerLatencySum.getAndSet(0)
+                val avgLatency = if (latencyCount > 0) latencySum / latencyCount else 0L
+
                 _statistics.update { current ->
                     current.copy(
+                        computerFps = computerFps,
+                        cloudFps = cloudFps,
+                        bandwidthKBps = bandwidthKBps,
                         droppedFrames = droppedFrameCounter.get(),
+                        computerLatency = avgLatency,
                         uptimeSeconds = uptime
                     )
                 }
