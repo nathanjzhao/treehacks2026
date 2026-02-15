@@ -6,10 +6,10 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-// ComputerStreamDestination - Direct IP HTTP Streaming
+// ComputerStreamDestination - Binary HTTP Streaming
 //
-// Handles streaming to computer via phone hotspot for VGGT 3D reconstruction.
-// Implements frame rate limiting, JPEG compression, and connection health monitoring.
+// Handles streaming to computer via HTTP POST with binary protocol.
+// Uses binary protocol: [4-byte header length][JSON metadata][JPEG data]
 
 package com.meta.wearable.dat.externalsampleapps.cameraaccess.streaming
 
@@ -21,9 +21,13 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.io.ByteArrayOutputStream
 import java.io.IOException
+import java.nio.ByteBuffer
 import java.text.SimpleDateFormat
 import java.util.*
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
+import kotlinx.coroutines.*
+import kotlinx.coroutines.sync.Semaphore
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 import kotlin.coroutines.suspendCoroutine
@@ -37,33 +41,48 @@ class ComputerStreamDestination(
     private val TAG = "ComputerStream"
 
     private val client = OkHttpClient.Builder()
-        .connectTimeout(2, TimeUnit.SECONDS)
-        .writeTimeout(10, TimeUnit.SECONDS)  // Increased for large frames
-        .readTimeout(2, TimeUnit.SECONDS)
-        .connectionPool(ConnectionPool(5, 30, TimeUnit.SECONDS))  // Connection pooling
-        .retryOnConnectionFailure(false)  // Don't auto-retry, we handle it
+        .connectTimeout(5, TimeUnit.SECONDS)
+        .writeTimeout(10, TimeUnit.SECONDS)
+        .readTimeout(5, TimeUnit.SECONDS)
+        .connectionPool(ConnectionPool(5, 30, TimeUnit.SECONDS))
+        .retryOnConnectionFailure(false)
         .build()
-
-    private var lastFrameTime = 0L
-    private val frameIntervalMs = 1000L / targetFps
 
     private val dateFormat = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.US).apply {
         timeZone = TimeZone.getTimeZone("UTC")
     }
 
-    private var framesSent = 0
-    private var framesSkipped = 0
+    private var framesSent = AtomicInteger(0)
+    private var connected = false
 
     init {
-        android.util.Log.w(TAG, "🚀 ComputerStreamDestination initialized:")
+        android.util.Log.w(TAG, "🚀 ComputerStreamDestination initialized (Binary HTTP):")
+        android.util.Log.w(TAG, "   Protocol: HTTP POST with binary frames")
         android.util.Log.w(TAG, "   Target FPS: $targetFps")
-        android.util.Log.w(TAG, "   Frame Interval: ${frameIntervalMs}ms (1000ms / $targetFps)")
         android.util.Log.w(TAG, "   JPEG Quality: $jpegQuality%")
-        android.util.Log.w(TAG, "   Endpoint: $endpoint:$port")
+        android.util.Log.w(TAG, "   Endpoint: http://$endpoint:$port/api/stream/ws")
     }
 
     /**
-     * Send a frame to the computer endpoint
+     * Connect (mark as ready to send)
+     */
+    fun connect(scope: CoroutineScope): Result<Unit> {
+        android.util.Log.i(TAG, "✅ Binary streaming ready")
+        connected = true
+        return Result.success(Unit)
+    }
+
+    /**
+     * Disconnect
+     */
+    fun disconnect() {
+        android.util.Log.i(TAG, "Disconnecting")
+        connected = false
+    }
+
+    /**
+     * Send a frame via HTTP POST with binary protocol
+     * Note: Rate limiting is handled in VideoStreamingManager before this is called
      */
     suspend fun sendFrame(
         frameData: ByteArray,
@@ -72,37 +91,50 @@ class ComputerStreamDestination(
         timestamp: Long,
         frameNumber: Int
     ): Result<Unit> {
-        // Frame rate limiting
-        val now = System.currentTimeMillis()
-        if (now - lastFrameTime < frameIntervalMs) {
-            framesSkipped++
-            if (framesSkipped % 30 == 0) {
-                android.util.Log.d(TAG, "⏭️ Rate limiter: Skipped $framesSkipped frames, sent $framesSent frames (targetFps=$targetFps)")
-            }
-            return Result.success(Unit)
-        }
-        lastFrameTime = now
-        framesSent++
+        val currentFrames = framesSent.incrementAndGet()
 
         StreamingLogger.debug(TAG, "Sending frame #$frameNumber (${frameData.size} bytes)")
 
         return try {
+            if (!connected) {
+                return Result.failure(Exception("Not connected"))
+            }
+
             // Convert I420 to JPEG
             val jpegData = convertToJpeg(frameData, width, height)
 
-            // Build multipart request
-            val request = buildMultipartRequest(jpegData, timestamp, frameNumber, width, height)
+            // Build metadata JSON
+            val metadata = buildString {
+                append("{\"type\":\"frame\",")
+                append("\"timestamp\":\"${dateFormat.format(Date(timestamp))}\",")
+                append("\"frame_number\":$frameNumber,")
+                append("\"width\":$width,\"height\":$height,")
+                append("\"jpeg_size\":${jpegData.size}}")
+            }
 
-            // Send request
+            // Wire format: [4-byte length] + [JSON] + [JPEG]
+            val metadataBytes = metadata.toByteArray(Charsets.UTF_8)
+            val wireFrame = ByteBuffer.allocate(4 + metadataBytes.size + jpegData.size)
+                .putInt(metadataBytes.size)
+                .put(metadataBytes)
+                .put(jpegData)
+                .array()
+
+            // Send via HTTP POST
+            val request = Request.Builder()
+                .url("http://$endpoint:$port/api/stream/ws")
+                .post(wireFrame.toRequestBody("application/octet-stream".toMediaType()))
+                .build()
+
             val startTime = System.currentTimeMillis()
             val response = executeRequest(request)
             val latency = System.currentTimeMillis() - startTime
 
             if (response.isSuccessful) {
-                StreamingLogger.info(
-                    TAG,
-                    "Frame #$frameNumber sent successfully (${response.code}, ${latency}ms, ${jpegData.size} bytes)"
-                )
+                // Log every 30th successful frame
+                if (currentFrames % 30 == 0) {
+                    android.util.Log.i(TAG, "📊 Binary HTTP: $currentFrames frames sent, Frame #$frameNumber, ${jpegData.size} bytes, ${latency}ms")
+                }
                 Result.success(Unit)
             } else {
                 val error = "HTTP ${response.code}: ${response.message}"
@@ -113,9 +145,24 @@ class ComputerStreamDestination(
             StreamingLogger.error(TAG, "Network error sending frame #$frameNumber: ${e.message}")
             Result.failure(e)
         } catch (e: Exception) {
-            StreamingLogger.error(TAG, "Unexpected error sending frame #$frameNumber: ${e.message}")
+            StreamingLogger.error(TAG, "Error sending frame #$frameNumber: ${e.message}")
             Result.failure(e)
         }
+    }
+
+    /**
+     * Execute HTTP request with coroutine support
+     */
+    private suspend fun executeRequest(request: Request): Response = suspendCoroutine { continuation ->
+        client.newCall(request).enqueue(object : Callback {
+            override fun onFailure(call: Call, e: IOException) {
+                continuation.resumeWithException(e)
+            }
+
+            override fun onResponse(call: Call, response: Response) {
+                continuation.resume(response)
+            }
+        })
     }
 
     /**
@@ -150,49 +197,4 @@ class ComputerStreamDestination(
         return output
     }
 
-    /**
-     * Build multipart/form-data HTTP request
-     */
-    private fun buildMultipartRequest(
-        jpegData: ByteArray,
-        timestamp: Long,
-        frameNumber: Int,
-        width: Int,
-        height: Int
-    ): Request {
-        val timestampStr = dateFormat.format(Date(timestamp))
-
-        val requestBody = MultipartBody.Builder()
-            .setType(MultipartBody.FORM)
-            .addFormDataPart(
-                "image",
-                "frame.jpg",
-                jpegData.toRequestBody("image/jpeg".toMediaType())
-            )
-            .addFormDataPart("timestamp", timestampStr)
-            .addFormDataPart("frame_number", frameNumber.toString())
-            .addFormDataPart("width", width.toString())
-            .addFormDataPart("height", height.toString())
-            .build()
-
-        return Request.Builder()
-            .url("http://$endpoint:$port/api/stream/frame")
-            .post(requestBody)
-            .build()
-    }
-
-    /**
-     * Execute HTTP request with coroutine support
-     */
-    private suspend fun executeRequest(request: Request): Response = suspendCoroutine { continuation ->
-        client.newCall(request).enqueue(object : Callback {
-            override fun onFailure(call: Call, e: IOException) {
-                continuation.resumeWithException(e)
-            }
-
-            override fun onResponse(call: Call, response: Response) {
-                continuation.resume(response)
-            }
-        })
-    }
 }
