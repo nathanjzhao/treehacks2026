@@ -746,18 +746,18 @@ export default function StreamPage() {
   const [videoReady, setVideoReady] = useState(false);
   const [videoError, setVideoError] = useState<string | null>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
-  const videoRef = useRef<HTMLCanvasElement>(null);
+  const videoRef = useRef<HTMLVideoElement>(null);
   const pidRef = useRef(0);
-  const [yoloEnabled, setYoloEnabled] = useState(false); // Disabled for canvas rendering
+  const localPendingRef = useRef(false);
+  const [yoloEnabled, setYoloEnabled] = useState(true);
   const [viewSize, setViewSize] = useState({ w: 1920, h: 1080 });
+  const [simulateInput, setSimulateInput] = useState("");
+  const [simulateError, setSimulateError] = useState<string | null>(null);
 
-  // YOLO object detection on canvas (disabled for now - needs adaptation for canvas)
-  const { detections, inferenceMs, modelLoaded, modelError } = useDetection(
-    videoRef as any, // Cast to work with canvas
-    {
-      enabled: false, // Disabled until canvas support is added
-    }
-  );
+  // YOLO object detection on video feed
+  const { detections, inferenceMs, modelLoaded, modelError } = useDetection(videoRef, {
+    enabled: yoloEnabled && videoReady,
+  });
 
   useEffect(() => {
     const update = () => setViewSize({ w: window.innerWidth, h: window.innerHeight });
@@ -772,97 +772,66 @@ export default function StreamPage() {
     return () => clearInterval(t);
   }, []);
 
-  // Ray-Ban Android stream via Server-Sent Events
+  // Ray-Ban Android MJPEG stream
   useEffect(() => {
     let cancelled = false;
-    let eventSource: EventSource | null = null;
     let retryTimeout: NodeJS.Timeout;
-    const canvasRef = videoRef as React.RefObject<HTMLCanvasElement>;
 
-    function startStreamConnection() {
-      if (cancelled) return;
+    function startAndroidStream() {
+      if (videoRef.current && !cancelled) {
+        console.log("[Stream] Connecting to MJPEG stream...");
 
-      console.log("[Stream] Connecting to SSE stream...");
+        const imgElement = videoRef.current as HTMLImageElement;
 
-      try {
-        eventSource = new EventSource("/api/stream/ws");
+        // Set MJPEG stream as image source
+        imgElement.src = "/api/stream/mjpeg";
 
-        eventSource.onopen = () => {
+        imgElement.onload = () => {
           if (!cancelled) {
-            console.log("[Stream] SSE connection established");
+            console.log("[Stream] MJPEG stream connected and ready");
+            setVideoReady(true);
             setVideoError(null);
           }
         };
 
-        eventSource.onmessage = (event) => {
-          if (cancelled) return;
+        imgElement.onerror = (err) => {
+          if (!cancelled) {
+            console.error("[Stream] Image error:", err);
+            setVideoError("Android stream not available - retrying...");
 
-          try {
-            const data = JSON.parse(event.data);
-
-            if (data.type === "connected") {
-              console.log("[Stream] Connected:", data.clientId);
-              setVideoReady(true);
-            } else if (data.type === "frame") {
-              // Render frame to canvas
-              renderFrame(data);
-            }
-          } catch (e) {
-            console.error("[Stream] Error parsing message:", e);
+            // Retry after 2 seconds
+            retryTimeout = setTimeout(() => {
+              if (!cancelled) {
+                console.log("[Stream] Retrying connection...");
+                startAndroidStream();
+              }
+            }, 2000);
           }
         };
 
-        eventSource.onerror = (err) => {
-          if (cancelled) return;
+        // Set a loading timeout - if not loaded after 5 seconds, retry
+        const loadTimeout = setTimeout(() => {
+          if (!cancelled && !videoReady) {
+            console.log("[Stream] Loading timeout, retrying...");
+            imgElement.src = "";
+            setTimeout(() => startAndroidStream(), 500);
+          }
+        }, 5000);
 
-          console.error("[Stream] SSE error:", err);
-          setVideoError("Stream disconnected - retrying...");
-          setVideoReady(false);
-
-          eventSource?.close();
-
-          // Retry after 2 seconds
-          retryTimeout = setTimeout(() => {
-            if (!cancelled) {
-              console.log("[Stream] Retrying connection...");
-              startStreamConnection();
-            }
-          }, 2000);
-        };
-      } catch (e) {
-        console.error("[Stream] Failed to create EventSource:", e);
-        setVideoError("Failed to connect to stream");
+        return () => clearTimeout(loadTimeout);
       }
     }
 
-    function renderFrame(frameData: any) {
-      const canvas = canvasRef.current;
-      if (!canvas) return;
-
-      const ctx = canvas.getContext("2d");
-      if (!ctx) return;
-
-      // Decode base64 JPEG
-      const img = new Image();
-      img.onload = () => {
-        canvas.width = frameData.width;
-        canvas.height = frameData.height;
-        ctx.drawImage(img, 0, 0);
-      };
-      img.onerror = (err) => {
-        console.error("[Stream] Error loading frame image:", err);
-      };
-      img.src = `data:image/jpeg;base64,${frameData.jpeg_base64}`;
-    }
-
-    startStreamConnection();
+    startAndroidStream();
 
     return () => {
       cancelled = true;
       clearTimeout(retryTimeout);
-      eventSource?.close();
+      if (videoRef.current) {
+        (videoRef.current as HTMLImageElement).src = "";
+      }
     };
-  }, [videoRef]);
+  }, [videoReady]);
 
   // Supabase realtime — mirror device chat in live mode
   useEffect(() => {
@@ -1104,9 +1073,10 @@ export default function StreamPage() {
 
       {/* ──── VIDEO BACKGROUND (Ray-Ban Android stream) ──── */}
       <div style={{ position: "absolute", inset: 0, zIndex: 0 }}>
-        {/* Live stream from Ray-Ban via Android (SSE + Canvas) */}
-        <canvas
-          ref={videoRef as React.RefObject<HTMLCanvasElement>}
+        {/* Live MJPEG stream from Ray-Ban via Android */}
+        <img
+          ref={videoRef as any}
+          alt="Ray-Ban stream"
           style={{
             position: "absolute",
             inset: 0,
@@ -1136,12 +1106,12 @@ export default function StreamPage() {
         <div style={{ position: "absolute", inset: 0, opacity: 0.03, backgroundImage: "linear-gradient(rgba(120,255,200,0.3) 1px, transparent 1px), linear-gradient(90deg, rgba(120,255,200,0.3) 1px, transparent 1px)", backgroundSize: "60px 60px", animation: "hud-grid-pulse 4s ease-in-out infinite" }} />
         {/* Film grain */}
         <div style={{ position: "absolute", inset: 0, opacity: 0.08, mixBlendMode: "overlay", background: "url(\"data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E\")" }} />
-        {/* YOLO detection overlay - disabled for canvas mode */}
-        {videoReady && videoRef.current && yoloEnabled && (
+        {/* YOLO detection overlay */}
+        {videoReady && videoRef.current && (
           <DetectionOverlay
             detections={detections}
-            videoWidth={videoRef.current.width || 1920}
-            videoHeight={videoRef.current.height || 1080}
+            videoWidth={(videoRef.current as any).videoWidth || (videoRef.current as any).naturalWidth || 1920}
+            videoHeight={(videoRef.current as any).videoHeight || (videoRef.current as any).naturalHeight || 1080}
             canvasWidth={viewSize.w}
             canvasHeight={viewSize.h}
             inferenceMs={inferenceMs}
@@ -1288,6 +1258,97 @@ export default function StreamPage() {
 
       {/* ──── CHAT OVERLAY ──── */}
       <div style={{ position: "absolute", bottom: 28, right: 28, top: 80, width: 440, zIndex: 20, display: "flex", flexDirection: "column" }}>
+        {/* Live mode: simulate Android transcript — injects into same flow as real device */}
+        {liveMode && (
+          <div
+            style={{
+              flexShrink: 0,
+              padding: "10px 0 12px",
+              borderBottom: "1px solid rgba(255,255,255,0.1)",
+              marginBottom: 8,
+              display: "flex",
+              flexDirection: "column",
+              gap: 8,
+            }}
+          >
+            <div style={{ fontSize: 10, fontFamily: "'DM Mono', monospace", color: "rgba(120,255,200,0.8)", fontWeight: 700, letterSpacing: "0.08em" }}>
+              SIMULATE ANDROID TRANSCRIPT
+            </div>
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                setSimulateError(null);
+                const raw = simulateInput.trim();
+                if (!processing && raw) {
+                  setSimulateInput("");
+                  setMessages((p) => [...p, { role: "user", text: raw, time: new Date() }]);
+                  localPendingRef.current = true;
+                  fetch("/api/chat", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ patient_id: DEMO_PATIENT_ID, message: raw }),
+                  })
+                    .then((res) => {
+                      localPendingRef.current = false;
+                      if (!res.ok) {
+                        res.text().then((t) => setSimulateError(`${res.status}: ${t.slice(0, 80)}`)).catch(() => setSimulateError(`${res.status} error`));
+                      }
+                    })
+                    .catch((err) => {
+                      localPendingRef.current = false;
+                      setSimulateError(err instanceof Error ? err.message : "Request failed");
+                    });
+                }
+              }}
+              style={{ display: "flex", flexDirection: "column", gap: 6 }}
+            >
+              <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+              <input
+                type="text"
+                value={simulateInput}
+                onChange={(e) => setSimulateInput(e.target.value)}
+                placeholder="Type text as if from device…"
+                disabled={!!processing}
+                style={{
+                  flex: 1,
+                  border: "1px solid rgba(120,255,200,0.35)",
+                  outline: "none",
+                  borderRadius: 10,
+                  padding: "10px 14px",
+                  fontSize: 14,
+                  color: "rgba(255,255,255,0.9)",
+                  fontFamily: "inherit",
+                  background: "rgba(0,0,0,0.5)",
+                  backdropFilter: "blur(12px)",
+                }}
+              />
+              <button
+                type="submit"
+                disabled={!!processing || !simulateInput.trim()}
+                style={{
+                  padding: "10px 18px",
+                  borderRadius: 10,
+                  border: "1px solid rgba(120,255,200,0.4)",
+                  background: simulateInput.trim() && !processing ? "rgba(120,255,200,0.2)" : "rgba(255,255,255,0.06)",
+                  color: simulateInput.trim() && !processing ? "rgba(120,255,200,1)" : "rgba(255,255,255,0.4)",
+                  fontSize: 13,
+                  fontFamily: "'DM Mono', monospace",
+                  fontWeight: 600,
+                  letterSpacing: "0.04em",
+                  cursor: simulateInput.trim() && !processing ? "pointer" : "default",
+                }}
+              >
+                Inject
+              </button>
+              </div>
+              {simulateError && (
+                <div style={{ fontSize: 11, color: "rgba(255,120,100,0.9)", fontFamily: "'DM Mono', monospace" }}>
+                  {simulateError}
+                </div>
+              )}
+            </form>
+          </div>
+        )}
         <div style={{ flex: 1, overflowY: "auto", display: "flex", flexDirection: "column", gap: 8, paddingBottom: 8 }}>
           <div style={{ flex: 1 }} />
           {messages.map((msg, i) => {
@@ -1370,7 +1431,7 @@ export default function StreamPage() {
 
         {liveMode ? (
           /* Live mode: mirroring indicator */
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8, padding: "12px 0" }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8, padding: "12px 0", flexShrink: 0 }}>
             <div style={{ width: 8, height: 8, borderRadius: "50%", background: "rgba(120,255,200,0.8)", animation: "hud-pulse-kf 1.5s ease-in-out infinite" }} />
             <span style={{ fontSize: 12, fontFamily: "'DM Mono', monospace", color: "rgba(120,255,200,0.7)", fontWeight: 500, letterSpacing: "0.05em", textShadow: "0 1px 3px rgba(0,0,0,0.6)" }}>
               MIRRORING DEVICE CHAT

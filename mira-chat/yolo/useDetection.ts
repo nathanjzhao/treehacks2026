@@ -16,7 +16,7 @@ interface UseDetectionOptions {
 }
 
 export function useDetection(
-  videoRef: React.RefObject<HTMLVideoElement | null>,
+  videoRef: React.RefObject<HTMLVideoElement | HTMLImageElement | null>,
   options: UseDetectionOptions = {}
 ) {
   const {
@@ -90,7 +90,11 @@ export function useDetection(
     const video = videoRef.current;
     const session = sessionRef.current;
     const canvas = canvasRef.current;
-    if (!video || !session || !canvas || video.readyState < 2) return;
+    // For <video> check readyState >= 2; for <img> check .complete
+    const isReady = video instanceof HTMLVideoElement
+      ? video.readyState >= 2
+      : (video as HTMLImageElement).complete && (video as HTMLImageElement).naturalWidth > 0;
+    if (!video || !session || !canvas || !isReady) return;
 
     const ctx = canvas.getContext("2d", { willReadFrequently: true });
     if (!ctx) return;
@@ -121,8 +125,9 @@ export function useDetection(
     const numDetections = 8400;
     const rawBoxes: Detection[] = [];
 
-    const videoW = video.videoWidth || INPUT_SIZE;
-    const videoH = video.videoHeight || INPUT_SIZE;
+    // Support both <video> (videoWidth) and <img> (naturalWidth)
+    const videoW = (video instanceof HTMLVideoElement ? video.videoWidth : (video as HTMLImageElement).naturalWidth) || INPUT_SIZE;
+    const videoH = (video instanceof HTMLVideoElement ? video.videoHeight : (video as HTMLImageElement).naturalHeight) || INPUT_SIZE;
     const scaleX = videoW / INPUT_SIZE;
     const scaleY = videoH / INPUT_SIZE;
 

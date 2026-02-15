@@ -62,9 +62,18 @@ yolo/
 - Each detection drawn with: outline rect (2px + shadowBlur glow), corner accents (3px thick, 16px long), label pill (dark bg, colored border, colored text)
 - Category colors defined in `types.ts` → `LABEL_COLORS` map
 
+### `<img>` vs `<video>` Element Support
+The MJPEG live stream from Ray-Ban glasses uses an **`<img>`** element (not `<video>`), because MJPEG is served as `multipart/x-mixed-replace`. The hook handles both:
+- **Ready check**: `<video>` uses `readyState >= 2`; `<img>` uses `.complete && .naturalWidth > 0`
+- **Dimensions**: `<video>` uses `videoWidth`/`videoHeight`; `<img>` uses `naturalWidth`/`naturalHeight`
+- **Frame capture**: `ctx.drawImage()` works on both element types
+
+The ref type is `HTMLVideoElement | HTMLImageElement`. The stream page casts with `as any` when passing to the hook.
+
 ### Integration in `/stream` page
-- `useDetection(videoRef, { enabled: yoloEnabled && videoReady })` — hook consumes the same `<video>` element used for the webcam background
+- `useDetection(videoRef, { enabled: yoloEnabled && videoReady })` — hook consumes the `<img>` element displaying the MJPEG feed
 - `<DetectionOverlay>` is placed inside the background layer, above the video but below HUD UI elements
+- `videoWidth`/`videoHeight` props use `naturalWidth`/`naturalHeight` fallbacks for `<img>`
 - Toggle button in bottom-left HUD corner enables/disables detection
 - Status line shows: model loaded state, detection count, inference time
 
