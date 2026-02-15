@@ -9,12 +9,12 @@ Includes camera path playback with smooth interpolation and optional
 video panels (source, segmentation mask, depth).
 
 Usage:
-  python groundedsam2/locate_viewer.py \
-    data/mapanything/IMG_4720.glb \
-    data/groundedsam2/IMG_4730_objects3d.json \
+  python segmentation/locate_viewer.py \
+    data/reconstruction/IMG_4720.glb \
+    data/segmentation/IMG_4730_objects3d.json \
     --reference hloc_localization/data/hloc_reference/IMG_4720/reference.tar.gz \
     --video data/IMG_4730.MOV \
-    --results-dir data/groundedsam2/
+    --results-dir data/segmentation/
 """
 
 import argparse

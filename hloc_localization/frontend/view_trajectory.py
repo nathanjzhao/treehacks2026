@@ -186,7 +186,7 @@ def pose_to_world(p):
 
 def main():
     base = pathlib.Path(__file__).parent.parent.parent
-    glb_path = base / "data" / "mapanything" / "IMG_4720.glb"
+    glb_path = base / "data" / "reconstruction" / "IMG_4720.glb"
     ref_tar_path = base / "hloc_localization" / "data" / "hloc_reference" / "IMG_4720" / "reference.tar.gz"
 
     # Load GLB point cloud

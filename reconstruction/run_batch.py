@@ -1,7 +1,7 @@
 """
 Run MapAnything on multiple videos in parallel via Modal.
 
-Usage: modal run mapanything/run_batch.py
+Usage: modal run reconstruction/run_batch.py
 """
 
 import pathlib
@@ -10,7 +10,7 @@ import time
 import modal
 
 # Re-use the existing app and its image/function
-from mapanything.app import app, predict_video
+from reconstruction.app import app, predict_video
 
 _data_dir = pathlib.Path(__file__).parent.parent / "data"
 

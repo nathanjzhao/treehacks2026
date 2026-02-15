@@ -5,7 +5,7 @@ Pre-decodes all frames into ImageBitmaps for smooth playback.
 Arrow keys to step, Space to play/pause, dropdown to switch videos.
 
 Usage:
-  python groundedsam2/depth_viewer.py data/groundedsam2/ --source-dir data/
+  python segmentation/depth_viewer.py data/segmentation/ --source-dir data/
 """
 
 import argparse

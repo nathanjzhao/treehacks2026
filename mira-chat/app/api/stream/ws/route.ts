@@ -10,6 +10,11 @@ let frameCount = 0;
 let bytesReceived = 0;
 const connectedAt = Date.now();
 
+// HLoc localization state
+let lastLocalizeTime = 0;
+const LOCALIZE_INTERVAL_MS = 3000; // Send frame for localization every 3s
+let localizationInFlight = false;
+
 /**
  * GET - Stream frames to web clients using Server-Sent Events
  */
@@ -53,6 +58,26 @@ export async function GET(req: NextRequest) {
       "Connection": "keep-alive",
       "X-Accel-Buffering": "no",
     },
+  });
+}
+
+/**
+ * Broadcast a localization pose to all connected streaming clients
+ */
+function broadcastPose(pose: Record<string, unknown>) {
+  const encoder = new TextEncoder();
+  const message = JSON.stringify({
+    type: "pose",
+    ...pose,
+  });
+  const data = encoder.encode(`data: ${message}\n\n`);
+
+  streamingClients.forEach((controller) => {
+    try {
+      controller.enqueue(data);
+    } catch {
+      // Client disconnected
+    }
   });
 }
 
@@ -130,6 +155,30 @@ export async function POST(req: NextRequest) {
 
       // Broadcast to connected web clients
       broadcastFrame(frame);
+
+      // Forward frame for HLoc localization (rate-limited, non-blocking)
+      const now = Date.now();
+      if (!localizationInFlight && now - lastLocalizeTime >= LOCALIZE_INTERVAL_MS) {
+        lastLocalizeTime = now;
+        localizationInFlight = true;
+        // Fire-and-forget: POST the JPEG to the localize endpoint
+        fetch(`${req.nextUrl.origin}/api/stream/localize`, {
+          method: "POST",
+          headers: { "Content-Type": "application/octet-stream" },
+          body: jpegData,
+        })
+          .then((res) => res.json())
+          .then((result) => {
+            if (!result.skipped) {
+              // Broadcast pose (success or failure) to all SSE clients
+              broadcastPose(result);
+            }
+          })
+          .catch((err) => console.error("[WS] Localize error:", err))
+          .finally(() => {
+            localizationInFlight = false;
+          });
+      }
 
       // Log every 30th frame
       if (frameCount % 30 === 0) {

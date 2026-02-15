@@ -49,6 +49,15 @@ class ServerState:
         self.pose_count: int = 0
         self.last_pose: dict | None = None
         self.calib: list[float] | None = None
+        self._localize_fn: modal.Function | None = None
+
+    def get_localize_fn(self) -> modal.Function:
+        """Get the deployed Modal function for frame localization."""
+        if self._localize_fn is None:
+            self._localize_fn = modal.Function.from_name(
+                "hloc-localization", "localize_frame"
+            )
+        return self._localize_fn
 
 
 state = ServerState()
@@ -63,6 +72,10 @@ def _load_reference(name: str) -> bytes | None:
 
 @app.on_event("startup")
 async def startup():
+    # Skip auto-load if already pre-loaded via CLI --reference
+    if state.reference_tar is not None:
+        print(f"Using pre-loaded reference: {state.reference_name} ({len(state.reference_tar) / 1024 / 1024:.1f} MB)")
+        return
     if REF_DIR.exists():
         for d in sorted(REF_DIR.iterdir()):
             tar_path = d / "reference.tar.gz"
@@ -151,10 +164,10 @@ async def localize_anchor(
 
     image_bytes = await image.read()
 
-    from hloc_localization.backend.app import localize_frame
+    localize_fn = state.get_localize_fn()
 
     t0 = time.time()
-    result = localize_frame.remote(image_bytes, state.reference_tar)
+    result = localize_fn.remote(image_bytes, state.reference_tar)
     result["latency_ms"] = (time.time() - t0) * 1000
 
     if result.get("success"):
@@ -236,7 +249,7 @@ async def stream_odometry(websocket: WebSocket):
         await websocket.close()
         return
 
-    from hloc_localization.backend.app import localize_frame
+    localize_fn = state.get_localize_fn()
 
     frame_idx = 0
     state.session_active = True
@@ -268,7 +281,7 @@ async def stream_odometry(websocket: WebSocket):
 
             if state.anchor_pose is None:
                 # First frame: localize with HLoc
-                result = localize_frame.remote(frame_bytes, state.reference_tar)
+                result = localize_fn.remote(frame_bytes, state.reference_tar)
                 if result.get("success"):
                     state.anchor_pose = result
                     result["source"] = "hloc"
@@ -282,7 +295,7 @@ async def stream_odometry(websocket: WebSocket):
                 # persistent GPU containers. For now, each frame is localized
                 # independently with HLoc, but the /odometry endpoint uses
                 # full DPVO batch processing.
-                result = localize_frame.remote(frame_bytes, state.reference_tar)
+                result = localize_fn.remote(frame_bytes, state.reference_tar)
                 result["source"] = "hloc"
                 result["frame_idx"] = frame_idx
                 result["latency_ms"] = (time.time() - t0) * 1000

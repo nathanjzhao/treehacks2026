@@ -1,7 +1,7 @@
 """
 Run Grounded SAM 2 tracking on multiple videos in parallel via Modal.
 
-Usage: modal run groundedsam2/run_batch.py --text-prompt "person. car."
+Usage: modal run segmentation/run_batch.py --text-prompt "person. car."
 """
 
 import pathlib
@@ -9,7 +9,7 @@ import time
 
 import modal
 
-from groundedsam2.app import app, track_objects
+from segmentation.app import app, track_objects
 
 _data_dir = pathlib.Path(__file__).parent.parent / "data"
 
@@ -23,7 +23,7 @@ def batch(
     box_threshold: float = 0.4,
 ):
     """Run Grounded SAM 2 tracking on all data/ videos in parallel."""
-    out_dir = pathlib.Path(__file__).parent.parent / "data" / "groundedsam2"
+    out_dir = pathlib.Path(__file__).parent.parent / "data" / "segmentation"
     out_dir.mkdir(exist_ok=True)
 
     print(f"Launching {len(VIDEOS)} parallel tracking jobs")

@@ -5,7 +5,7 @@ Shows source video alongside SAM2 tracking overlay and depth-masked segmentation
 Arrow keys to step, Space to play/pause, dropdown to switch videos.
 
 Usage:
-  python groundedsam2/seg_viewer.py data/groundedsam2/ --source-dir data/
+  python segmentation/seg_viewer.py data/segmentation/ --source-dir data/
 """
 
 import argparse
