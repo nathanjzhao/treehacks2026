@@ -85,11 +85,12 @@ class StreamViewModel(
   fun startStream() {
     videoJob?.cancel()
     stateJob?.cancel()
+    val settings = _uiState.value.streamingConfiguration.settings
     val streamSession =
         Wearables.startStreamSession(
                 getApplication(),
                 deviceSelector,
-                StreamConfiguration(videoQuality = VideoQuality.MEDIUM, 24),
+                StreamConfiguration(videoQuality = VideoQuality.HIGH, settings.sdkFrameRate),
             )
             .also { streamSession = it }
     videoJob = viewModelScope.launch { streamSession.videoStream.collect { handleVideoFrame(it) } }
@@ -408,10 +409,11 @@ class StreamViewModel(
     )
   }
 
-  suspend fun updateQualitySettings(targetFps: Int, jpegQuality: Int) {
+  suspend fun updateQualitySettings(targetFps: Int, sdkFrameRate: Int, jpegQuality: Int) {
     streamingPreferences.updateSettings(
         _uiState.value.streamingConfiguration.settings.copy(
             computerTargetFps = targetFps,
+            sdkFrameRate = sdkFrameRate,
             jpegQuality = jpegQuality
         )
     )

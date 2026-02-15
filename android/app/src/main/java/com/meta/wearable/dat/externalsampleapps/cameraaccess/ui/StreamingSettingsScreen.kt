@@ -49,6 +49,7 @@ fun StreamingSettingsScreen(
     var cloudEnabled by remember { mutableStateOf(config.cloud.enabled) }
 
     var targetFps by remember { mutableStateOf(config.settings.computerTargetFps.toFloat()) }
+    var sdkFrameRate by remember { mutableStateOf(config.settings.sdkFrameRate) }
     var jpegQuality by remember { mutableStateOf(config.settings.jpegQuality.toFloat()) }
 
     Scaffold(
@@ -242,6 +243,30 @@ fun StreamingSettingsScreen(
                     Spacer(modifier = Modifier.height(8.dp))
 
                     Text(
+                        "SDK Frame Rate",
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        listOf(15, 24, 30).forEach { fps ->
+                            FilterChip(
+                                selected = sdkFrameRate == fps,
+                                onClick = { sdkFrameRate = fps },
+                                label = { Text("${fps} FPS") }
+                            )
+                        }
+                    }
+                    Text(
+                        "Higher FPS = smoother video, more battery usage",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    Text(
                         "JPEG Quality: ${jpegQuality.toInt()}%",
                         style = MaterialTheme.typography.bodyMedium
                     )
@@ -263,6 +288,7 @@ fun StreamingSettingsScreen(
                             scope.launch {
                                 streamViewModel.updateQualitySettings(
                                     targetFps.toInt(),
+                                    sdkFrameRate,
                                     jpegQuality.toInt()
                                 )
                             }

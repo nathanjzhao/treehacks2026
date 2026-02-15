@@ -769,38 +769,33 @@ export default function StreamPage() {
     return () => clearInterval(t);
   }, []);
 
-  // Webcam video feed — swap this for Ray-Ban JPEG stream later
+  // Ray-Ban Android MJPEG stream
   useEffect(() => {
-    let stream: MediaStream | null = null;
     let cancelled = false;
 
-    async function startCamera() {
-      try {
-        stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: "environment", width: { ideal: 1920 }, height: { ideal: 1080 } },
-          audio: false,
-        });
-        if (cancelled) {
-          stream.getTracks().forEach((t) => t.stop());
-          return;
-        }
-        if (videoRef.current) {
-          videoRef.current.srcObject = stream;
-          setVideoReady(true);
-        }
-      } catch (err) {
-        if (!cancelled) {
-          setVideoError(err instanceof Error ? err.message : "Camera not available");
-        }
+    function startAndroidStream() {
+      if (videoRef.current && !cancelled) {
+        // Set MJPEG stream as video source
+        videoRef.current.src = "/api/stream/mjpeg";
+        videoRef.current.onloadeddata = () => {
+          if (!cancelled) {
+            setVideoReady(true);
+          }
+        };
+        videoRef.current.onerror = (err) => {
+          if (!cancelled) {
+            setVideoError("Android stream not available - check connection");
+          }
+        };
       }
     }
 
-    startCamera();
+    startAndroidStream();
 
     return () => {
       cancelled = true;
-      if (stream) {
-        stream.getTracks().forEach((t) => t.stop());
+      if (videoRef.current) {
+        videoRef.current.src = "";
       }
     };
   }, []);
@@ -1043,7 +1038,7 @@ export default function StreamPage() {
         ::-webkit-scrollbar{width:3px}::-webkit-scrollbar-thumb{background:rgba(255,255,255,0.1);border-radius:3px}
       `}</style>
 
-      {/* ──── VIDEO BACKGROUND (webcam now, Ray-Ban stream later) ──── */}
+      {/* ──── VIDEO BACKGROUND (Ray-Ban Android stream) ──── */}
       <div style={{ position: "absolute", inset: 0, zIndex: 0 }}>
         {/* Live camera feed */}
         <video
