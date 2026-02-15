@@ -2,7 +2,6 @@ import { NextRequest } from "next/server";
 import { getSupabaseServerClient } from "@/lib/supabase-server";
 import { appendEvent, getRecentEvents, logEscalation } from "@/lib/event-spine";
 import { sendSms } from "@/lib/twilio";
-import { publishStep } from "@/lib/step-bus";
 import WebSocket from "ws";
 
 // ────────────────────────────────────────────────────────────────
@@ -1023,8 +1022,6 @@ export async function POST(request: NextRequest) {
         controller.enqueue(
           encoder.encode(`data: ${JSON.stringify(data)}\n\n`)
         );
-        // Also broadcast to step-bus so /stream mirrors in real-time
-        publishStep(patient_id, data);
       };
 
       const emitStep = (
