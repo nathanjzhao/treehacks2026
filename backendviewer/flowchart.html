@@ -345,6 +345,16 @@
     border-radius: 50%;
     flex-shrink: 0;
   }
+  .brand .brand-logo {
+    width: 20px; height: 20px;
+    object-fit: contain;
+    flex-shrink: 0;
+    border-radius: 3px;
+    transition: transform 0.3s, width 0.3s, height 0.3s;
+  }
+  .node.flow-active .brand .brand-logo {
+    width: 26px; height: 26px;
+  }
 
   .legend .source-swatch {
     width: 14px; height: 14px;
@@ -418,34 +428,32 @@
     <span class="icon">🏗️</span>
     <span class="label">3D Reconstruction</span>
     <span class="sub">SfM / DUSt3R</span>
-    <span class="brand modal"><span class="brand-dot" style="background:#53b47e"></span>Modal</span>
+    <span class="brand modal"><img class="brand-logo" src="logos/modal.png" alt="">Modal</span>
   </div>
   <div class="node glow-blue" id="objdet" style="left:205px; top:290px; width:130px;">
     <span class="icon">🏷️</span>
     <span class="label">Object Detection</span>
     <span class="sub">Grounding DINO</span>
-    <span class="brand modal"><span class="brand-dot" style="background:#53b47e"></span>Modal</span>
+    <span class="brand modal"><img class="brand-logo" src="logos/modal.png" alt="">Modal</span>
   </div>
   <div class="node glow-blue" id="refimg" style="left:355px; top:290px; width:120px;">
     <span class="icon">📸</span>
     <span class="label">Reference Images</span>
-    <span class="brand modal"><span class="brand-dot" style="background:#53b47e"></span>Modal</span>
   </div>
   <div class="node glow-blue" id="pointcloud" style="left:50px; top:420px; width:130px;">
     <span class="icon">☁️</span>
     <span class="label">3D Point Cloud</span>
-    <span class="brand modal"><span class="brand-dot" style="background:#53b47e"></span>Modal</span>
+    <span class="brand modal"><img class="brand-logo" src="logos/modal.png" alt="">Modal</span>
   </div>
   <div class="node glow-blue" id="objdb" style="left:205px; top:420px; width:130px;">
     <span class="icon">🗄️</span>
     <span class="label">Spatial Object DB</span>
     <span class="sub">label → xyz</span>
-    <span class="brand modal"><span class="brand-dot" style="background:#53b47e"></span>Modal</span>
+    <span class="brand modal"><img class="brand-logo" src="logos/modal.png" alt="">Modal</span>
   </div>
   <div class="node glow-blue" id="refdb" style="left:355px; top:420px; width:120px;">
     <span class="icon">🗂️</span>
     <span class="label">Reference DB</span>
-    <span class="brand modal"><span class="brand-dot" style="background:#53b47e"></span>Modal</span>
   </div>
 
   <!-- Online -->
@@ -478,7 +486,7 @@
     <span class="icon">🗣️</span>
     <span class="label">Speech-to-Text</span>
     <span class="sub">Whisper</span>
-    <span class="brand whisper"><span class="brand-dot" style="background:#a0a8c0"></span>OpenAI</span>
+    <span class="brand whisper"><img class="brand-logo" src="logos/openai.png" alt="">OpenAI</span>
   </div>
 
   <!-- Agent -->
@@ -486,7 +494,7 @@
     <span class="icon">🤖</span>
     <span class="label">LLM Agent</span>
     <span class="sub">Tool Calling</span>
-    <span class="brand anthropic" id="llm-brand"><span class="brand-dot" id="llm-brand-dot" style="background:#d97757"></span><span id="llm-brand-name">Claude</span></span>
+    <span class="brand anthropic" id="llm-brand"><img class="brand-logo" id="llm-brand-logo" src="logos/claude.jpg" alt=""><span id="llm-brand-name">Claude</span></span>
   </div>
   <div class="node glow-cyan" id="tool-nav" style="left:190px; top:800px; width:150px;">
     <span class="icon">🧭</span>
@@ -497,13 +505,13 @@
     <span class="icon">🏥</span>
     <span class="label">Patient Info</span>
     <span class="sub">EHR / FHIR</span>
-    <span class="brand openevidence"><span class="brand-dot" style="background:#64a0ff"></span>OpenEvidence</span>
+    <span class="brand openevidence"><img class="brand-logo" src="logos/openevidence.jpg" alt="">OpenEvidence</span>
   </div>
   <div class="node glow-cyan" id="tool-med" style="left:830px; top:800px; width:150px;">
     <span class="icon">💊</span>
     <span class="label">Medication Lookup</span>
     <span class="sub">web search</span>
-    <span class="brand perplexity"><span class="brand-dot" style="background:#20808d"></span>Perplexity</span>
+    <span class="brand perplexity"><img class="brand-logo" src="logos/perplexity.png" alt="">Perplexity</span>
   </div>
   <div class="node glow-purple" id="response" style="left:520px; top:960px; width:160px;">
     <span class="icon">💬</span>
@@ -512,7 +520,7 @@
   <div class="node glow-purple" id="tts" style="left:520px; top:1060px; width:160px;">
     <span class="icon">🔊</span>
     <span class="label">Text-to-Speech</span>
-    <span class="brand whisper"><span class="brand-dot" style="background:#a0a8c0"></span>OpenAI</span>
+    <span class="brand whisper"><img class="brand-logo" src="logos/openai.png" alt="">OpenAI</span>
   </div>
 
   <!-- Views -->
@@ -1007,22 +1015,26 @@ document.addEventListener('keydown', (e) => {
     }
   }
 
+  // Mode hotkeys
+  if (e.key === '1') { setMode('explore'); return; }
+  if (e.key === '2') { setMode('flow'); return; }
+
   // LLM switcher — works in any mode
   const llmBrand = document.getElementById('llm-brand');
-  const llmBrandDot = document.getElementById('llm-brand-dot');
+  const llmBrandLogo = document.getElementById('llm-brand-logo');
   const llmBrandName = document.getElementById('llm-brand-name');
 
   if (e.key === 'a' || e.key === 'A') {
     llmBrand.className = 'brand anthropic';
-    llmBrandDot.style.background = '#d97757';
+    llmBrandLogo.src = 'logos/claude.jpg';
     llmBrandName.textContent = 'Claude';
   } else if (e.key === 's' || e.key === 'S') {
     llmBrand.className = 'brand openai';
-    llmBrandDot.style.background = '#e4e8f4';
+    llmBrandLogo.src = 'logos/openai.png';
     llmBrandName.textContent = 'GPT-4o';
   } else if (e.key === 'd' || e.key === 'D') {
     llmBrand.className = 'brand gemini';
-    llmBrandDot.style.background = '#4285f4';
+    llmBrandLogo.src = 'logos/gemini.webp';
     llmBrandName.textContent = 'Gemini';
   }
 });
