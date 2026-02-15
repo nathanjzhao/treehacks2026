@@ -193,10 +193,46 @@
   .region.views    { border-color: rgba(236,72,153,0.15); background: rgba(236,72,153,0.015); }
   .region.views .region-label { color: var(--pink); }
 
-  .legend {
+  .bottom-panel {
     position: fixed;
     bottom: 16px;
     right: 24px;
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+    z-index: 50;
+  }
+  .powered-by {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 10px 16px;
+    background: rgba(19,21,29,0.85);
+    backdrop-filter: blur(8px);
+    border: 1px solid #1e2030;
+    border-radius: 8px 8px 0 0;
+    border-bottom: none;
+    font-family: 'JetBrains Mono', monospace;
+  }
+  .powered-by .powered-label {
+    font-size: 8px;
+    font-weight: 700;
+    letter-spacing: 1.2px;
+    text-transform: uppercase;
+    color: var(--text-dim);
+  }
+  .powered-by .powered-logos {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  .powered-by .powered-logos img {
+    width: 24px;
+    height: 24px;
+    object-fit: contain;
+    border-radius: 5px;
+  }
+  .legend {
     display: flex;
     flex-direction: column;
     gap: 8px;
@@ -207,8 +243,7 @@
     background: rgba(19,21,29,0.85);
     backdrop-filter: blur(8px);
     border: 1px solid #1e2030;
-    border-radius: 8px;
-    z-index: 50;
+    border-radius: 0 0 8px 8px;
   }
   .legend span {
     display: flex;
@@ -572,7 +607,6 @@
   <div class="node glow-red" id="glasses" style="left:460px; top:20px; width:220px;">
     <span class="icon">🕶️</span>
     <span class="label">Meta Ray-Ban Glasses</span>
-    <span class="brand meta"><img class="brand-logo" src="logos/meta.webp" alt="">Meta</span>
   </div>
 
   <div class="node glow-red" id="video" style="left:260px; top:135px; width:140px;">
@@ -700,11 +734,23 @@
 </div>
 
 <!-- Legend — fixed bottom-right -->
-<div class="legend">
-  <span><span class="swatch solid"></span>Direct flow</span>
-  <span><span class="swatch dashed"></span>Cross-pipeline data</span>
-  <span><span class="source-swatch"></span>Upstream source</span>
-  <span><span class="target-swatch"></span>Downstream target</span>
+<div class="bottom-panel">
+  <div class="powered-by">
+    <span class="powered-label">Powered by</span>
+    <div class="powered-logos">
+      <img src="logos/modal.png" alt="Modal">
+      <img src="logos/claude.jpg" alt="Anthropic">
+      <img src="logos/openai.png" alt="OpenAI">
+      <img src="logos/openevidence.jpg" alt="OpenEvidence">
+      <img src="logos/perplexity.png" alt="Perplexity">
+    </div>
+  </div>
+  <div class="legend">
+    <span><span class="swatch solid"></span>Direct flow</span>
+    <span><span class="swatch dashed"></span>Cross-pipeline data</span>
+    <span><span class="source-swatch"></span>Upstream source</span>
+    <span><span class="target-swatch"></span>Downstream target</span>
+  </div>
 </div>
 
 <!-- Video Preview Panel -->
@@ -978,7 +1024,6 @@ let activeVideoNode = null;
 
 // ── Company data per node ──
 const nodeCompanyMap = {
-  'glasses':     { logo: 'logos/meta.webp',          name: 'Meta' },
   'recon':       { logo: 'logos/modal.png',         name: 'Modal' },
   'objdet':      { logo: 'logos/modal.png',         name: 'Modal' },
   'objdb':       { logo: 'logos/modal.png',         name: 'Modal' },
