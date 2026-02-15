@@ -5,6 +5,7 @@ Usage: python viewer.py /path/to/scene.glb
 """
 
 import argparse
+import asyncio
 from collections import Counter
 from pathlib import Path
 
@@ -17,6 +18,8 @@ from fastapi.responses import HTMLResponse
 from jinja2 import Template
 
 from object_finder import find_and_fly_to_object
+from gemini_client import detect_up_direction
+from camera_utils import look_at_wxyz
 
 
 def _camera_apex(mesh: trimesh.Trimesh) -> np.ndarray:
@@ -214,6 +217,10 @@ def main():
         cam_distance = float(np.linalg.norm(bbox_extent)) * 0.8
         init_cam_pos = centroid + np.array([0, -cam_distance, cam_distance * 0.5])
 
+    # Scene up will be detected on first client connect via Gemini
+    scene_up = [0.0, 0.0, 1.0]  # default, updated after detection
+    up_detected = [False]  # mutable flag for closure
+
     # --- Start viser ---
     server = viser.ViserServer(host="0.0.0.0", port=args.viser_port)
     state.viser_server = server
@@ -243,10 +250,56 @@ def main():
 
     @server.on_client_connect
     def _(client: viser.ClientHandle):
+        import object_finder as _of
+
         state.active_client = client
         client.camera.position = tuple(init_cam_pos)
         client.camera.look_at = tuple(centroid)
-        client.camera.up_direction = (0.0, 0.0, 1.0)
+        client.camera.up_direction = tuple(scene_up)
+
+        if not up_detected[0] and cam_positions:
+            up_detected[0] = True
+            print("Detecting scene up direction via Gemini...")
+
+            import threading
+
+            def _detect():
+                try:
+                    import time
+                    time.sleep(0.5)  # let client finish connecting
+
+                    test_pos = cam_positions[0]
+                    up_candidates = [
+                        (np.array([0.0, 0.0, 1.0]), "A (+Z up)"),
+                        (np.array([0.0, 1.0, 0.0]), "B (+Y up)"),
+                        (np.array([0.0, -1.0, 0.0]), "C (-Y up)"),
+                    ]
+                    up_renders = []
+                    up_labels = []
+                    for up_vec, label in up_candidates:
+                        wxyz = look_at_wxyz(test_pos, centroid, up=up_vec)
+                        render = client.get_render(
+                            height=480, width=640,
+                            wxyz=tuple(wxyz),
+                            position=tuple(test_pos),
+                            fov=1.2,
+                        )
+                        up_renders.append(np.array(render))
+                        up_labels.append(label)
+
+                    detected = asyncio.run(detect_up_direction(up_renders, up_labels))
+                    scene_up[:] = detected.tolist()
+                    _of._scene_up = detected
+                    print(f"Detected up direction: {detected}")
+
+                    # Update camera with correct orientation
+                    client.camera.up_direction = tuple(scene_up)
+                    client.camera.position = tuple(init_cam_pos)
+                    client.camera.look_at = tuple(centroid)
+                except Exception as e:
+                    print(f"Up detection failed: {e}")
+
+            threading.Thread(target=_detect, daemon=True).start()
 
     @server.on_client_disconnect
     def _(client: viser.ClientHandle):

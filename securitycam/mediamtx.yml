@@ -1,2 +1,7 @@
+rtmpAddress: 0.0.0.0:1935
+rtspAddress: 0.0.0.0:8554
+hlsAddress: 0.0.0.0:8888
+webrtcAddress: 0.0.0.0:8889
+
 paths:
   all_others:

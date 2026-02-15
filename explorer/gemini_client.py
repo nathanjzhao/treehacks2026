@@ -21,7 +21,7 @@ OR_MODEL = "google/gemini-3-flash-preview"
 
 # --- Native Gemini config ---
 GEMINI_API_KEY = "AIzaSyBCVFzvkIxQ4K0l5ZxudjLyuJBTful6lv4"
-GEMINI_MODEL = "gemini-2.5-flash"  # box_3d support
+GEMINI_MODEL = "gemini-3.0-flash-preview"  # Gemini 3 Flash
 
 
 def _numpy_to_jpeg_bytes(img_array: np.ndarray, quality: int = 85) -> bytes:
@@ -274,6 +274,8 @@ async def detect_up_direction(
     Sends 3 renders to Gemini (rendered with different up-vector candidates)
     and asks which looks right-side up.
 
+    Primary: OpenRouter. Fallback: native Gemini API.
+
     Args:
         renders: list of 3 images, one per candidate up vector
         labels: ["A (+Z up)", "B (+Y up)", "C (-Y up)"]
@@ -281,46 +283,88 @@ async def detect_up_direction(
     Returns:
         The up vector as np.ndarray (e.g. [0,0,1] or [0,1,0])
     """
-    client = genai.Client(api_key=GEMINI_API_KEY)
+    UP_MAP = {"A": np.array([0.0, 0.0, 1.0]),
+              "B": np.array([0.0, 1.0, 0.0]),
+              "C": np.array([0.0, -1.0, 0.0])}
 
-    content_parts = []
-    for i, (render, label) in enumerate(zip(renders, labels)):
-        content_parts.append(f"Option {label}:")
-        jpeg_bytes = _numpy_to_jpeg_bytes(render)
-        content_parts.append(
-            types.Part.from_bytes(data=jpeg_bytes, mime_type="image/jpeg")
-        )
-
-    content_parts.append(
+    prompt = (
         "These are 3 renders of the same indoor 3D scene from the same camera position, "
         "but with different 'up' orientations. Which option shows the scene RIGHT-SIDE UP "
         "(gravity pointing down, floor at bottom, ceiling at top)?\n"
         "Reply with ONLY the letter: A, B, or C."
     )
 
-    config = types.GenerateContentConfig(temperature=0.0)
+    def _parse_up(answer: str) -> np.ndarray | None:
+        for key in UP_MAP:
+            if key in answer.upper():
+                print(f"[Gemini-Up] Detected up direction: {key} = {UP_MAP[key]}", flush=True)
+                return UP_MAP[key]
+        return None
 
+    # --- Primary: OpenRouter ---
     try:
+        image_content = []
+        for render, label in zip(renders, labels):
+            b64 = _numpy_to_base64_jpeg(render)
+            image_content.append({"type": "text", "text": f"Option {label}:"})
+            image_content.append({
+                "type": "image_url",
+                "image_url": {"url": f"data:image/jpeg;base64,{b64}"},
+            })
+        image_content.append({"type": "text", "text": prompt})
+
+        payload = {
+            "model": OR_MODEL,
+            "messages": [{"role": "user", "content": image_content}],
+            "temperature": 0.0,
+            "max_tokens": 10,
+        }
+
+        async with httpx.AsyncClient(timeout=30.0) as http_client:
+            response = await http_client.post(
+                OR_API_URL,
+                headers={
+                    "Authorization": f"Bearer {OR_API_KEY}",
+                    "Content-Type": "application/json",
+                },
+                json=payload,
+            )
+            response.raise_for_status()
+            answer = response.json()["choices"][0]["message"]["content"].strip()
+
+        print(f"[Gemini-Up] OpenRouter response: {answer}", flush=True)
+        result = _parse_up(answer)
+        if result is not None:
+            return result
+    except Exception as e:
+        print(f"[Gemini-Up] OpenRouter failed: {e}, trying native API...", flush=True)
+
+    # --- Fallback: Native Gemini API ---
+    try:
+        client = genai.Client(api_key=GEMINI_API_KEY)
+        content_parts = []
+        for render, label in zip(renders, labels):
+            content_parts.append(f"Option {label}:")
+            jpeg_bytes = _numpy_to_jpeg_bytes(render)
+            content_parts.append(
+                types.Part.from_bytes(data=jpeg_bytes, mime_type="image/jpeg")
+            )
+        content_parts.append(prompt)
+        config = types.GenerateContentConfig(temperature=0.0)
+
         response = await asyncio.to_thread(
             client.models.generate_content,
             model=GEMINI_MODEL,
             contents=content_parts,
             config=config,
         )
-        answer = response.text.strip().upper()
-        print(f"[Gemini-Up] Response: {answer}", flush=True)
-
-        UP_MAP = {"A": np.array([0.0, 0.0, 1.0]),
-                  "B": np.array([0.0, 1.0, 0.0]),
-                  "C": np.array([0.0, -1.0, 0.0])}
-
-        for key in UP_MAP:
-            if key in answer:
-                print(f"[Gemini-Up] Detected up direction: {key} = {UP_MAP[key]}", flush=True)
-                return UP_MAP[key]
-
-        print(f"[Gemini-Up] Could not parse '{answer}', defaulting to +Z", flush=True)
-        return np.array([0.0, 0.0, 1.0])
+        answer = response.text.strip()
+        print(f"[Gemini-Up] Native API response: {answer}", flush=True)
+        result = _parse_up(answer)
+        if result is not None:
+            return result
     except Exception as e:
-        print(f"[Gemini-Up] Failed: {e}, defaulting to +Z", flush=True)
-        return np.array([0.0, 0.0, 1.0])
+        print(f"[Gemini-Up] Native API also failed: {e}", flush=True)
+
+    print(f"[Gemini-Up] All attempts failed, defaulting to +Z", flush=True)
+    return np.array([0.0, 0.0, 1.0])
