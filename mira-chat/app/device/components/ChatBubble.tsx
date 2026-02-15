@@ -16,7 +16,7 @@ export interface ChatMessage {
   steps?: StepInfo[];
   stepsFinished?: boolean;
   // Sonar citations
-  citations?: Array<{ title?: string; url: string }>;
+  citations?: Array<{ title?: string; url: string; evidence_grade?: string }>;
 }
 
 interface ChatBubbleProps {

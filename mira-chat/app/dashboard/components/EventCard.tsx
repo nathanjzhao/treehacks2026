@@ -14,6 +14,7 @@ const TYPE_META: Record<string, { label: string; icon: string; color: string }> 
   OBJECT_NOT_FOUND: { label: "Not Found", icon: "\u{274C}", color: "bg-amber-100 text-amber-700" },
   ESCALATED: { label: "Escalation", icon: "\u{1F6A8}", color: "bg-red-100 text-red-700" },
   WEB_SEARCH_COMPLETED: { label: "Web Search", icon: "\u{1F310}", color: "bg-indigo-100 text-indigo-700" },
+  CLINICAL_GUIDELINE_CHECKED: { label: "Clinical Guideline", icon: "\u{1F3E5}", color: "bg-emerald-100 text-emerald-700" },
 };
 
 const SEVERITY_COLORS: Record<string, string> = {
@@ -96,6 +97,33 @@ export default function EventCard({ event }: EventCardProps) {
             <div className="text-xs text-emerald-700 mt-1">
               Confidence:{" "}
               {Math.round((event.payload.confidence as number) * 100)}%
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Clinical guideline evidence level */}
+      {event.type === "CLINICAL_GUIDELINE_CHECKED" && event.payload && (
+        <div className="mt-3 p-3 bg-emerald-50 rounded-xl border border-emerald-200/50">
+          <div className="flex items-center gap-2">
+            <span className="text-[10px] font-bold text-emerald-800 uppercase tracking-wider">
+              Evidence Level
+            </span>
+            <span
+              className={`text-[9px] font-bold px-2 py-0.5 rounded ${
+                (event.payload as any).evidence_level === "high"
+                  ? "bg-emerald-200 text-emerald-800"
+                  : (event.payload as any).evidence_level === "moderate"
+                  ? "bg-amber-200 text-amber-800"
+                  : "bg-slate-200 text-slate-600"
+              }`}
+            >
+              {((event.payload as any).evidence_level || "unknown").toUpperCase()}
+            </span>
+          </div>
+          {(event.payload as any).condition && (
+            <div className="text-sm text-emerald-900 mt-1 font-medium">
+              {(event.payload as any).condition}
             </div>
           )}
         </div>

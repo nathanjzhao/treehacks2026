@@ -6,6 +6,7 @@ export const EVENT_TYPES = [
   "OBJECT_NOT_FOUND",
   "ESCALATED",
   "WEB_SEARCH_COMPLETED",
+  "CLINICAL_GUIDELINE_CHECKED",
 ] as const;
 
 export const SEVERITIES = ["GREEN", "YELLOW", "ORANGE", "RED"] as const;
