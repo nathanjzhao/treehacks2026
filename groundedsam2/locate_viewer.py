@@ -647,10 +647,7 @@ def main():
     with server.gui.add_folder("Objects"):
         for obj in object_summary:
             pos = obj["mean_position_3d_aligned"]
-            color = obj_color_map[obj["obj_id"]]
-            hex_color = f"#{color[0]:02x}{color[1]:02x}{color[2]:02x}"
             server.gui.add_markdown(
-                f"<span style='color:{hex_color}'>&#9679;</span> "
                 f"**{obj['label']}** (id={obj['obj_id']})\n\n"
                 f"Pos: ({pos[0]:.2f}, {pos[1]:.2f}, {pos[2]:.2f})\n\n"
                 f"Depth: {obj['mean_depth']:.1f} | Obs: {obj['num_observations']}"
