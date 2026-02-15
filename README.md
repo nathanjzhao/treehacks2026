@@ -16,7 +16,7 @@ A resident says "Where are my glasses?" → the system reconstructs their room i
 
 ## System Architecture
 
-<video src="https://github.com/user-attachments/assets/1c7aa57f-a811-44ee-84d3-1f848819c239" autoplay loop muted playsinline width="100%"></video>
+<video src="https://github.com/user-attachments/assets/5a214eb2-ba6b-4e09-b9b9-fe8bcc5b3d0d" autoplay loop muted playsinline width="100%"></video>
 
 [Interactive version](backendviewer/flowchart.html) — click nodes to see video demos of each pipeline stage.
 
