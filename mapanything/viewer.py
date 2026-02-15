@@ -12,6 +12,7 @@ from pathlib import Path
 import numpy as np
 import trimesh
 import uvicorn
+import socket
 import viser
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
@@ -76,7 +77,8 @@ def load_glb(path: str) -> tuple[np.ndarray, np.ndarray, list[trimesh.Trimesh]]:
     if points is None:
         raise ValueError(f"No PointCloud found in {path}")
 
-    print(f"Loaded {len(points):,} points, {len(camera_meshes)} camera cones from {Path(path).name}")
+    print(
+        f"Loaded {len(points):,} points, {len(camera_meshes)} camera cones from {Path(path).name}")
     return points, colors, camera_meshes
 
 
@@ -151,16 +153,37 @@ def _load_and_display(server: viser.ViserServer, glb_path: str, downsample: int)
 
 
 # ---------- main ----------
+def _find_available_port(start: int, max_tries: int = 10, host: str = "0.0.0.0") -> int:
+    for port in range(start, start + max_tries):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            try:
+                s.bind((host, port))
+                return port
+            except OSError:
+                continue
+    raise RuntimeError(
+        f"No available port in range {start}-{start + max_tries - 1}")
+
+
 def main():
     global VISER_PORT
 
-    parser = argparse.ArgumentParser(description="View MapAnything GLB point clouds")
-    parser.add_argument("glb", help="Path to .glb file or directory of .glb files")
-    parser.add_argument("--port", type=int, default=8080, help="Main web UI port")
-    parser.add_argument("--viser-port", type=int, default=8081, help="Internal viser port")
+    parser = argparse.ArgumentParser(
+        description="View MapAnything GLB point clouds")
+    parser.add_argument(
+        "glb", help="Path to .glb file or directory of .glb files")
+    parser.add_argument("--port", type=int, default=8080,
+                        help="Main web UI port")
+    parser.add_argument("--viser-port", type=int,
+                        default=8081, help="Internal viser port")
     parser.add_argument("--downsample", type=int, default=20,
                         help="Keep every Nth point (default: 20)")
     args = parser.parse_args()
+    # choose port (try next ports if requested port is taken)
+    chosen_port = _find_available_port(args.port, max_tries=10)
+    if chosen_port != args.port:
+        print(f"Port {args.port} in use — using {chosen_port} instead")
+    args.port = chosen_port
     VISER_PORT = args.viser_port
 
     # Discover all GLB files
