@@ -131,6 +131,17 @@ class StreamViewModel(
           videoStreamingManager.disableComputerStreaming()
         }
 
+        if (config.computer2.enabled) {
+          videoStreamingManager.enableComputer2Streaming(
+              endpoint = config.computer2.ip,
+              port = config.computer2.port,
+              targetFps = config.settings.computerTargetFps,
+              jpegQuality = config.settings.jpegQuality
+          )
+        } else {
+          videoStreamingManager.disableComputer2Streaming()
+        }
+
         if (config.cloud.enabled && config.cloud.userId.isNotEmpty()) {
           videoStreamingManager.enableCloudStreaming(
               userId = config.cloud.userId,
@@ -142,7 +153,7 @@ class StreamViewModel(
 
         // Update UI enabled state
         _uiState.update {
-          it.copy(multiDestinationStreamingEnabled = config.computer.enabled || config.cloud.enabled)
+          it.copy(multiDestinationStreamingEnabled = config.computer.enabled || config.computer2.enabled || config.cloud.enabled)
         }
       }
     }
@@ -394,6 +405,22 @@ class StreamViewModel(
     )
   }
 
+  suspend fun enableComputer2Streaming(ip: String, port: Int) {
+    streamingPreferences.updateComputer2Endpoint(
+        _uiState.value.streamingConfiguration.computer2.copy(
+            ip = ip,
+            port = port,
+            enabled = true
+        )
+    )
+  }
+
+  suspend fun disableComputer2Streaming() {
+    streamingPreferences.updateComputer2Endpoint(
+        _uiState.value.streamingConfiguration.computer2.copy(enabled = false)
+    )
+  }
+
   suspend fun enableCloudStreaming(userId: String) {
     streamingPreferences.updateCloudEndpoint(
         _uiState.value.streamingConfiguration.cloud.copy(
@@ -431,6 +458,20 @@ class StreamViewModel(
       videoStreamingManager.enableComputerStreaming(
           endpoint = currentConfig.computer.ip,
           port = currentConfig.computer.port,
+          targetFps = targetFps,
+          jpegQuality = jpegQuality
+      )
+    }
+
+    // Restart computer 2 streaming if it was enabled
+    val wasComputer2Enabled = currentConfig.computer2.enabled
+    if (wasComputer2Enabled) {
+      android.util.Log.i("StreamViewModel", "Restarting computer 2 streaming with new settings: ${targetFps}fps, ${jpegQuality}% quality")
+      videoStreamingManager.disableComputer2Streaming()
+      kotlinx.coroutines.delay(100)
+      videoStreamingManager.enableComputer2Streaming(
+          endpoint = currentConfig.computer2.ip,
+          port = currentConfig.computer2.port,
           targetFps = targetFps,
           jpegQuality = jpegQuality
       )

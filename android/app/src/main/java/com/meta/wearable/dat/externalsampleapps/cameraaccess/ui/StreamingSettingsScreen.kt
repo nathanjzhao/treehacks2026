@@ -47,6 +47,10 @@ fun StreamingSettingsScreen(
     var computerPort by remember { mutableStateOf(config.computer.port.toString()) }
     var computerEnabled by remember { mutableStateOf(config.computer.enabled) }
 
+    var computer2Ip by remember { mutableStateOf(config.computer2.ip) }
+    var computer2Port by remember { mutableStateOf(config.computer2.port.toString()) }
+    var computer2Enabled by remember { mutableStateOf(config.computer2.enabled) }
+
     var cloudUserId by remember { mutableStateOf(config.cloud.userId) }
     var cloudEnabled by remember { mutableStateOf(config.cloud.enabled) }
 
@@ -184,6 +188,127 @@ fun StreamingSettingsScreen(
                                 scope.launch {
                                     streamViewModel.enableComputerStreaming(
                                         computerIp,
+                                        newPort.toIntOrNull() ?: 3000
+                                    )
+                                }
+                            }
+                        },
+                        label = { Text("Port") },
+                        placeholder = { Text("3000") },
+                        supportingText = { Text("Next.js dev server port") },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            }
+
+            // Computer 2 Streaming Section
+            Card {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column {
+                            Text(
+                                "Computer 2 Streaming",
+                                style = MaterialTheme.typography.titleMedium
+                            )
+                            // Real-time status indicator
+                            uiState.streamingStats?.let { stats ->
+                                Row(
+                                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(8.dp)
+                                            .background(
+                                                color = when (stats.computer2Status) {
+                                                    com.meta.wearable.dat.externalsampleapps.cameraaccess.streaming.ConnectionStatus.CONNECTED ->
+                                                        MaterialTheme.colorScheme.primary
+                                                    com.meta.wearable.dat.externalsampleapps.cameraaccess.streaming.ConnectionStatus.CONNECTING ->
+                                                        MaterialTheme.colorScheme.tertiary
+                                                    com.meta.wearable.dat.externalsampleapps.cameraaccess.streaming.ConnectionStatus.ERROR ->
+                                                        MaterialTheme.colorScheme.error
+                                                    else -> MaterialTheme.colorScheme.onSurfaceVariant
+                                                },
+                                                shape = MaterialTheme.shapes.small
+                                            )
+                                    )
+                                    Text(
+                                        when (stats.computer2Status) {
+                                            com.meta.wearable.dat.externalsampleapps.cameraaccess.streaming.ConnectionStatus.CONNECTED ->
+                                                "Connected · ${String.format("%.1f", stats.computer2Fps)} FPS · ${stats.computer2Latency}ms"
+                                            com.meta.wearable.dat.externalsampleapps.cameraaccess.streaming.ConnectionStatus.CONNECTING ->
+                                                "Connecting..."
+                                            com.meta.wearable.dat.externalsampleapps.cameraaccess.streaming.ConnectionStatus.ERROR ->
+                                                "Error - Check connection"
+                                            else -> "Disconnected"
+                                        },
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                        }
+                        Switch(
+                            checked = computer2Enabled,
+                            onCheckedChange = { enabled ->
+                                computer2Enabled = enabled
+                                scope.launch {
+                                    if (enabled && computer2Ip.isNotEmpty()) {
+                                        streamViewModel.enableComputer2Streaming(
+                                            computer2Ip,
+                                            computer2Port.toIntOrNull() ?: 3000
+                                        )
+                                    } else {
+                                        streamViewModel.disableComputer2Streaming()
+                                    }
+                                }
+                            }
+                        )
+                    }
+
+                    Text(
+                        "Stream video to second computer via Tailscale network",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+
+                    OutlinedTextField(
+                        value = computer2Ip,
+                        onValueChange = { newIp ->
+                            computer2Ip = newIp
+                            if (computer2Enabled && newIp.isNotEmpty()) {
+                                scope.launch {
+                                    streamViewModel.enableComputer2Streaming(
+                                        newIp,
+                                        computer2Port.toIntOrNull() ?: 3000
+                                    )
+                                }
+                            }
+                        },
+                        label = { Text("Tailscale IP Address") },
+                        placeholder = { Text("100.x.x.x") },
+                        supportingText = { Text("Second computer's Tailscale IP") },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+
+                    OutlinedTextField(
+                        value = computer2Port,
+                        onValueChange = { newPort ->
+                            computer2Port = newPort
+                            if (computer2Enabled && computer2Ip.isNotEmpty()) {
+                                scope.launch {
+                                    streamViewModel.enableComputer2Streaming(
+                                        computer2Ip,
                                         newPort.toIntOrNull() ?: 3000
                                     )
                                 }
@@ -442,6 +567,56 @@ fun StreamingSettingsScreen(
                                     Text(
                                         String.format("%.1f KB/s", stats.bandwidthKBps),
                                         style = MaterialTheme.typography.bodyMedium
+                                    )
+                                }
+                            }
+
+                            HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+                        }
+
+                        // Computer 2 Metrics (only show if enabled)
+                        if (computer2Enabled) {
+                            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Text(
+                                    "Computer 2 Stream",
+                                    style = MaterialTheme.typography.titleSmall,
+                                    color = MaterialTheme.colorScheme.secondary
+                                )
+
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Text(
+                                        "Frame Rate:",
+                                        style = MaterialTheme.typography.bodyMedium
+                                    )
+                                    Text(
+                                        String.format("%.1f FPS", stats.computer2Fps),
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
+                                        color = if (stats.computer2Fps > 0) MaterialTheme.colorScheme.primary
+                                        else MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Text(
+                                        "Latency:",
+                                        style = MaterialTheme.typography.bodyMedium
+                                    )
+                                    Text(
+                                        "${stats.computer2Latency}ms",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = when {
+                                            stats.computer2Latency == 0L -> MaterialTheme.colorScheme.onSurfaceVariant
+                                            stats.computer2Latency < 150 -> MaterialTheme.colorScheme.primary
+                                            stats.computer2Latency < 300 -> MaterialTheme.colorScheme.tertiary
+                                            else -> MaterialTheme.colorScheme.error
+                                        }
                                     )
                                 }
                             }

@@ -22,6 +22,10 @@ import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
+import android.graphics.ImageFormat
+import android.graphics.Rect
+import android.graphics.YuvImage
+import java.io.ByteArrayOutputStream
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 
@@ -68,10 +72,17 @@ class VideoStreamingManager(
 
     // Streaming destinations
     private var computerDestination: ComputerStreamDestination? = null
+    private var computer2Destination: ComputerStreamDestination? = null
     private var cloudDestination: CloudStreamDestination? = null
 
     // Frame flow channels with overflow handling
     private val computerFrameFlow = MutableSharedFlow<FrameData>(
+        replay = 0,
+        extraBufferCapacity = 1,
+        onBufferOverflow = BufferOverflow.DROP_OLDEST
+    )
+
+    private val computer2FrameFlow = MutableSharedFlow<FrameData>(
         replay = 0,
         extraBufferCapacity = 1,
         onBufferOverflow = BufferOverflow.DROP_OLDEST
@@ -90,26 +101,37 @@ class VideoStreamingManager(
 
     // Per-destination frame counters for FPS calculation
     private val computerFrameCounter = AtomicInteger(0)
+    private val computer2FrameCounter = AtomicInteger(0)
     private val cloudFrameCounter = AtomicInteger(0)
     private val lastComputerFrameCount = AtomicInteger(0)
+    private val lastComputer2FrameCount = AtomicInteger(0)
     private val lastCloudFrameCount = AtomicInteger(0)
 
     // Bandwidth tracking
     private val computerBytesTransferred = AtomicLong(0)
     private val lastComputerBytes = AtomicLong(0)
+    private val computer2BytesTransferred = AtomicLong(0)
+    private val lastComputer2Bytes = AtomicLong(0)
 
     // Latency tracking (moving average)
     private val computerLatencySum = AtomicLong(0)
     private val computerLatencyCount = AtomicInteger(0)
+    private val computer2LatencySum = AtomicLong(0)
+    private val computer2LatencyCount = AtomicInteger(0)
 
     // Concurrency control for uploads
     private var computerUploadSemaphore: Semaphore? = null
+    private var computer2UploadSemaphore: Semaphore? = null
+
+    // Cached JPEG quality for encode-once fan-out
+    private var cachedJpegQuality: Int = 70
 
     private val _statistics = MutableStateFlow(StreamingStats())
     val statistics: StateFlow<StreamingStats> = _statistics.asStateFlow()
 
     // Collection jobs
     private var computerJob: Job? = null
+    private var computer2Job: Job? = null
     private var cloudJob: Job? = null
     private var statsJob: Job? = null
 
@@ -125,6 +147,8 @@ class VideoStreamingManager(
         StreamingLogger.info(TAG, "Enabling computer streaming: $endpoint:$port @ ${targetFps}fps, quality=${jpegQuality}%")
         android.util.Log.w(TAG, "⚠️ COMPUTER STREAMING CONFIG: targetFps=${targetFps}, jpegQuality=${jpegQuality}, endpoint=$endpoint:$port")
 
+        cachedJpegQuality = jpegQuality
+
         // Cancel existing job if any
         computerJob?.cancel()
 
@@ -137,63 +161,57 @@ class VideoStreamingManager(
         )
         android.util.Log.i(TAG, "✅ ComputerStreamDestination created with targetFps=$targetFps")
 
-        // Connect to WebSocket
+        // Connect
         computerDestination?.connect(coroutineScope)?.onSuccess {
-            android.util.Log.i(TAG, "✅ WebSocket connection initiated")
+            android.util.Log.i(TAG, "✅ Computer 1 connection initiated")
         }?.onFailure { error ->
-            android.util.Log.e(TAG, "❌ WebSocket connection failed: ${error.message}")
+            android.util.Log.e(TAG, "❌ Computer 1 connection failed: ${error.message}")
         }
 
         // Update status
-        _statistics.update { it.copy(computerStatus = com.meta.wearable.dat.externalsampleapps.cameraaccess.streaming.ConnectionStatus.CONNECTING) }
+        _statistics.update { it.copy(computerStatus = ConnectionStatus.CONNECTING) }
 
         // Initialize rate limiting and concurrency control
         val frameIntervalMs = 1000L / targetFps
-        val maxConcurrentUploads = 5  // Match OkHttp connection pool size
+        val maxConcurrentUploads = 5
         computerUploadSemaphore = Semaphore(maxConcurrentUploads)
 
         android.util.Log.w(TAG, "⏱️ Rate limiting: Using .sample(${frameIntervalMs}ms) for ${targetFps} FPS")
-        android.util.Log.w(TAG, "⚙️ Concurrency control: Max ${maxConcurrentUploads} concurrent uploads")
 
-        // Start collection with .sample() for rate limiting
+        // Start collection — frames arrive pre-encoded as JPEG from distributeFrame()
         computerJob = coroutineScope.launch(Dispatchers.IO) {
             try {
                 @OptIn(kotlinx.coroutines.FlowPreview::class)
                 computerFrameFlow
                     .sample(frameIntervalMs)
                     .collect { frameData ->
-                        // Launch upload in parallel with concurrency control
                         launch(Dispatchers.IO) {
                             computerUploadSemaphore?.withPermit {
                                 val sendStartTime = System.currentTimeMillis()
 
-                                computerDestination?.sendFrame(
-                                    frameData = frameData.data,
+                                // frameData.data is already JPEG-encoded
+                                computerDestination?.sendJpegFrame(
+                                    jpegData = frameData.data,
                                     width = frameData.width,
                                     height = frameData.height,
                                     timestamp = frameData.timestamp,
                                     frameNumber = frameData.frameNumber
                                 )?.onSuccess {
                                     val latency = System.currentTimeMillis() - sendStartTime
-
-                                    // Update counters
                                     computerFrameCounter.incrementAndGet()
                                     computerBytesTransferred.addAndGet(frameData.data.size.toLong())
-
-                                    // Track latency (moving average)
                                     computerLatencySum.addAndGet(latency)
                                     computerLatencyCount.incrementAndGet()
-
                                     _statistics.update { it.copy(computerStatus = ConnectionStatus.CONNECTED) }
                                 }?.onFailure { error ->
-                                    StreamingLogger.error(TAG, "Computer streaming error: ${error.message}")
+                                    StreamingLogger.error(TAG, "Computer 1 streaming error: ${error.message}")
                                     _statistics.update { it.copy(computerStatus = ConnectionStatus.ERROR) }
                                 }
                             }
                         }
                     }
             } catch (e: Exception) {
-                StreamingLogger.error(TAG, "Computer streaming job error: ${e.message}")
+                StreamingLogger.error(TAG, "Computer 1 streaming job error: ${e.message}")
                 _statistics.update { it.copy(computerStatus = ConnectionStatus.ERROR) }
             }
         }
@@ -204,16 +222,12 @@ class VideoStreamingManager(
      */
     fun disableComputerStreaming() {
         StreamingLogger.info(TAG, "Disabling computer streaming")
-
-        // Disconnect WebSocket
         computerDestination?.disconnect()
-
         computerJob?.cancel()
         computerJob = null
         computerDestination = null
         computerUploadSemaphore = null
 
-        // Reset counters
         computerFrameCounter.set(0)
         lastComputerFrameCount.set(0)
         computerBytesTransferred.set(0)
@@ -222,9 +236,102 @@ class VideoStreamingManager(
         computerLatencyCount.set(0)
 
         _statistics.update { it.copy(
-            computerStatus = com.meta.wearable.dat.externalsampleapps.cameraaccess.streaming.ConnectionStatus.DISCONNECTED,
+            computerStatus = ConnectionStatus.DISCONNECTED,
             computerFps = 0f,
             computerLatency = 0
+        ) }
+    }
+
+    /**
+     * Enable computer 2 streaming to specified endpoint
+     */
+    fun enableComputer2Streaming(endpoint: String, port: Int, targetFps: Int = 7, jpegQuality: Int = 70) {
+        StreamingLogger.info(TAG, "Enabling computer 2 streaming: $endpoint:$port @ ${targetFps}fps, quality=${jpegQuality}%")
+        android.util.Log.w(TAG, "⚠️ COMPUTER 2 STREAMING CONFIG: targetFps=${targetFps}, jpegQuality=${jpegQuality}, endpoint=$endpoint:$port")
+
+        cachedJpegQuality = jpegQuality
+
+        computer2Job?.cancel()
+
+        computer2Destination = ComputerStreamDestination(
+            endpoint = endpoint,
+            port = port,
+            targetFps = targetFps,
+            jpegQuality = jpegQuality
+        )
+        android.util.Log.i(TAG, "✅ ComputerStreamDestination 2 created with targetFps=$targetFps")
+
+        computer2Destination?.connect(coroutineScope)?.onSuccess {
+            android.util.Log.i(TAG, "✅ Computer 2 connection initiated")
+        }?.onFailure { error ->
+            android.util.Log.e(TAG, "❌ Computer 2 connection failed: ${error.message}")
+        }
+
+        _statistics.update { it.copy(computer2Status = ConnectionStatus.CONNECTING) }
+
+        val frameIntervalMs = 1000L / targetFps
+        val maxConcurrentUploads = 5
+        computer2UploadSemaphore = Semaphore(maxConcurrentUploads)
+
+        computer2Job = coroutineScope.launch(Dispatchers.IO) {
+            try {
+                @OptIn(kotlinx.coroutines.FlowPreview::class)
+                computer2FrameFlow
+                    .sample(frameIntervalMs)
+                    .collect { frameData ->
+                        launch(Dispatchers.IO) {
+                            computer2UploadSemaphore?.withPermit {
+                                val sendStartTime = System.currentTimeMillis()
+
+                                computer2Destination?.sendJpegFrame(
+                                    jpegData = frameData.data,
+                                    width = frameData.width,
+                                    height = frameData.height,
+                                    timestamp = frameData.timestamp,
+                                    frameNumber = frameData.frameNumber
+                                )?.onSuccess {
+                                    val latency = System.currentTimeMillis() - sendStartTime
+                                    computer2FrameCounter.incrementAndGet()
+                                    computer2BytesTransferred.addAndGet(frameData.data.size.toLong())
+                                    computer2LatencySum.addAndGet(latency)
+                                    computer2LatencyCount.incrementAndGet()
+                                    _statistics.update { it.copy(computer2Status = ConnectionStatus.CONNECTED) }
+                                }?.onFailure { error ->
+                                    StreamingLogger.error(TAG, "Computer 2 streaming error: ${error.message}")
+                                    _statistics.update { it.copy(computer2Status = ConnectionStatus.ERROR) }
+                                }
+                            }
+                        }
+                    }
+            } catch (e: Exception) {
+                StreamingLogger.error(TAG, "Computer 2 streaming job error: ${e.message}")
+                _statistics.update { it.copy(computer2Status = ConnectionStatus.ERROR) }
+            }
+        }
+    }
+
+    /**
+     * Disable computer 2 streaming
+     */
+    fun disableComputer2Streaming() {
+        StreamingLogger.info(TAG, "Disabling computer 2 streaming")
+        computer2Destination?.disconnect()
+        computer2Job?.cancel()
+        computer2Job = null
+        computer2Destination = null
+        computer2UploadSemaphore = null
+
+        computer2FrameCounter.set(0)
+        lastComputer2FrameCount.set(0)
+        computer2BytesTransferred.set(0)
+        lastComputer2Bytes.set(0)
+        computer2LatencySum.set(0)
+        computer2LatencyCount.set(0)
+
+        _statistics.update { it.copy(
+            computer2Status = ConnectionStatus.DISCONNECTED,
+            computer2Fps = 0f,
+            computer2Latency = 0
         ) }
     }
 
@@ -287,7 +394,8 @@ class VideoStreamingManager(
     }
 
     /**
-     * Distribute a video frame to all enabled destinations
+     * Distribute a video frame to all enabled destinations.
+     * JPEG encoding happens once and is shared by both computer destinations.
      */
     suspend fun distributeFrame(
         frameData: ByteArray,
@@ -299,35 +407,83 @@ class VideoStreamingManager(
 
         StreamingLogger.debug(TAG, "Distributing frame #$frameNumber: ${width}x${height}, ${frameData.size} bytes")
 
-        val frame = FrameData(
-            data = frameData,
-            width = width,
-            height = height,
-            timestamp = timestamp,
-            frameNumber = frameNumber
-        )
+        // Encode JPEG once for both computer destinations
+        val needsJpeg = computerDestination != null || computer2Destination != null
+        val jpegData = if (needsJpeg) encodeJpeg(frameData, width, height, cachedJpegQuality) else null
 
-        // Emit to computer destination
-        if (computerDestination != null) {
-            val emitted = computerFrameFlow.tryEmit(frame)
+        // Emit pre-encoded JPEG to computer 1
+        if (computerDestination != null && jpegData != null) {
+            val jpegFrame = FrameData(
+                data = jpegData,
+                width = width,
+                height = height,
+                timestamp = timestamp,
+                frameNumber = frameNumber
+            )
+            val emitted = computerFrameFlow.tryEmit(jpegFrame)
             if (!emitted) {
                 droppedFrameCounter.incrementAndGet()
-                StreamingLogger.warning(TAG, "Dropped frame #$frameNumber for computer (buffer full)")
-            } else {
-                StreamingLogger.debug(TAG, "Frame #$frameNumber queued for computer")
+                StreamingLogger.warning(TAG, "Dropped frame #$frameNumber for computer 1 (buffer full)")
             }
         }
 
-        // Emit to cloud destination
+        // Emit same pre-encoded JPEG to computer 2
+        if (computer2Destination != null && jpegData != null) {
+            val jpegFrame = FrameData(
+                data = jpegData,
+                width = width,
+                height = height,
+                timestamp = timestamp,
+                frameNumber = frameNumber
+            )
+            val emitted = computer2FrameFlow.tryEmit(jpegFrame)
+            if (!emitted) {
+                droppedFrameCounter.incrementAndGet()
+                StreamingLogger.warning(TAG, "Dropped frame #$frameNumber for computer 2 (buffer full)")
+            }
+        }
+
+        // Emit raw I420 to cloud destination (it does its own JPEG encoding at higher quality)
         if (cloudDestination != null) {
-            val emitted = cloudFrameFlow.tryEmit(frame)
+            val rawFrame = FrameData(
+                data = frameData,
+                width = width,
+                height = height,
+                timestamp = timestamp,
+                frameNumber = frameNumber
+            )
+            val emitted = cloudFrameFlow.tryEmit(rawFrame)
             if (!emitted) {
                 droppedFrameCounter.incrementAndGet()
                 StreamingLogger.warning(TAG, "Dropped frame #$frameNumber for cloud (buffer full)")
-            } else {
-                StreamingLogger.debug(TAG, "Frame #$frameNumber queued for cloud")
             }
         }
+    }
+
+    /**
+     * Convert I420 raw data to JPEG (encode once, share across destinations)
+     */
+    private fun encodeJpeg(i420Data: ByteArray, width: Int, height: Int, quality: Int): ByteArray {
+        val nv21 = convertI420toNV21(i420Data, width, height)
+        val yuvImage = YuvImage(nv21, ImageFormat.NV21, width, height, null)
+        val outputStream = ByteArrayOutputStream()
+        yuvImage.compressToJpeg(Rect(0, 0, width, height), quality, outputStream)
+        return outputStream.toByteArray()
+    }
+
+    /**
+     * Convert I420 (YYYYYYYY:UUVV) to NV21 (YYYYYYYY:VUVU)
+     */
+    private fun convertI420toNV21(input: ByteArray, width: Int, height: Int): ByteArray {
+        val output = ByteArray(input.size)
+        val size = width * height
+        val quarter = size / 4
+        input.copyInto(output, 0, 0, size)
+        for (n in 0 until quarter) {
+            output[size + n * 2] = input[size + quarter + n]
+            output[size + n * 2 + 1] = input[size + n]
+        }
+        return output
     }
 
     /**
@@ -342,30 +498,44 @@ class VideoStreamingManager(
 
                 val uptime = (System.currentTimeMillis() - startTime.get()) / 1000
 
-                // Calculate FPS (frames sent in the last second)
+                // Computer 1 FPS
                 val currentComputerFrames = computerFrameCounter.get()
                 val computerFps = (currentComputerFrames - lastComputerFrameCount.getAndSet(currentComputerFrames)).toFloat()
 
+                // Computer 2 FPS
+                val currentComputer2Frames = computer2FrameCounter.get()
+                val computer2Fps = (currentComputer2Frames - lastComputer2FrameCount.getAndSet(currentComputer2Frames)).toFloat()
+
+                // Cloud FPS
                 val currentCloudFrames = cloudFrameCounter.get()
                 val cloudFps = (currentCloudFrames - lastCloudFrameCount.getAndSet(currentCloudFrames)).toFloat()
 
-                // Calculate bandwidth (KB/s)
+                // Bandwidth (KB/s) — sum of both computers
                 val currentBytes = computerBytesTransferred.get()
-                val bytesPerSecond = currentBytes - lastComputerBytes.getAndSet(currentBytes)
-                val bandwidthKBps = bytesPerSecond / 1024f
+                val bytesPerSecond1 = currentBytes - lastComputerBytes.getAndSet(currentBytes)
+                val currentBytes2 = computer2BytesTransferred.get()
+                val bytesPerSecond2 = currentBytes2 - lastComputer2Bytes.getAndSet(currentBytes2)
+                val bandwidthKBps = (bytesPerSecond1 + bytesPerSecond2) / 1024f
 
-                // Calculate average latency
+                // Computer 1 average latency
                 val latencyCount = computerLatencyCount.getAndSet(0)
                 val latencySum = computerLatencySum.getAndSet(0)
                 val avgLatency = if (latencyCount > 0) latencySum / latencyCount else 0L
 
+                // Computer 2 average latency
+                val latency2Count = computer2LatencyCount.getAndSet(0)
+                val latency2Sum = computer2LatencySum.getAndSet(0)
+                val avgLatency2 = if (latency2Count > 0) latency2Sum / latency2Count else 0L
+
                 _statistics.update { current ->
                     current.copy(
                         computerFps = computerFps,
+                        computer2Fps = computer2Fps,
                         cloudFps = cloudFps,
                         bandwidthKBps = bandwidthKBps,
                         droppedFrames = droppedFrameCounter.get(),
                         computerLatency = avgLatency,
+                        computer2Latency = avgLatency2,
                         uptimeSeconds = uptime
                     )
                 }
@@ -379,6 +549,7 @@ class VideoStreamingManager(
     fun cleanup() {
         StreamingLogger.info(TAG, "Cleaning up VideoStreamingManager")
         disableComputerStreaming()
+        disableComputer2Streaming()
         disableCloudStreaming()
         statsJob?.cancel()
     }

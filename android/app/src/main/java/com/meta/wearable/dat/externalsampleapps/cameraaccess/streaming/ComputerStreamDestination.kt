@@ -91,17 +91,30 @@ class ComputerStreamDestination(
         timestamp: Long,
         frameNumber: Int
     ): Result<Unit> {
+        // Convert I420 to JPEG
+        val jpegData = convertToJpeg(frameData, width, height)
+        return sendJpegFrame(jpegData, width, height, timestamp, frameNumber)
+    }
+
+    /**
+     * Send a pre-encoded JPEG frame via HTTP POST with binary protocol.
+     * Use this when JPEG encoding is done once upstream and shared across destinations.
+     */
+    suspend fun sendJpegFrame(
+        jpegData: ByteArray,
+        width: Int,
+        height: Int,
+        timestamp: Long,
+        frameNumber: Int
+    ): Result<Unit> {
         val currentFrames = framesSent.incrementAndGet()
 
-        StreamingLogger.debug(TAG, "Sending frame #$frameNumber (${frameData.size} bytes)")
+        StreamingLogger.debug(TAG, "Sending frame #$frameNumber (${jpegData.size} bytes)")
 
         return try {
             if (!connected) {
                 return Result.failure(Exception("Not connected"))
             }
-
-            // Convert I420 to JPEG
-            val jpegData = convertToJpeg(frameData, width, height)
 
             // Build metadata JSON
             val metadata = buildString {
