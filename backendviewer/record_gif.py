@@ -53,11 +53,11 @@ async def main():
         # Wait for entrance animations
         await asyncio.sleep(3)
 
-        # Slow down flow animation for recording (2x slower)
-        await page.evaluate("window.flowSpeedMultiplier = 2")
+        # Slow down flow animation for recording (3x slower)
+        await page.evaluate("window.flowSpeedMultiplier = 3")
 
-        # Switch to data flow mode
-        await page.keyboard.press("2")
+        # Switch to showcase mode (hotkey 3)
+        await page.keyboard.press("3")
         # Hide mode toggle UI for clean recording
         await page.evaluate("""() => {
             const toggle = document.querySelector('.mode-toggle');

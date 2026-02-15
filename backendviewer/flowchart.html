@@ -740,8 +740,9 @@
     <span class="powered-label">Powered by</span>
     <div class="powered-logos">
       <img src="logos/modal.png" alt="Modal">
-      <img src="logos/claude.jpg" alt="Anthropic">
       <img src="logos/openai.png" alt="OpenAI">
+      <img src="logos/claude.jpg" alt="Anthropic">
+      <img src="logos/gemini.webp" alt="Google">
       <img src="logos/openevidence.jpg" alt="OpenEvidence">
       <img src="logos/perplexity.png" alt="Perplexity">
     </div>
@@ -1055,8 +1056,20 @@ const activeCompanyEl = document.getElementById('activeCompany');
 const activeCompanyLogo = document.getElementById('activeCompanyLogo');
 const activeCompanyName = document.getElementById('activeCompanyName');
 
+function getCompanyForNode(nodeId) {
+  if (nodeId === 'llm') {
+    // Dynamically read current LLM brand
+    const logoEl = document.getElementById('llm-brand-logo');
+    const nameEl = document.getElementById('llm-brand-name');
+    if (logoEl && nameEl) {
+      return { logo: logoEl.src, name: nameEl.textContent };
+    }
+  }
+  return nodeCompanyMap[nodeId];
+}
+
 function showCompanyBadge(nodeId) {
-  const company = nodeCompanyMap[nodeId];
+  const company = getCompanyForNode(nodeId);
   if (!company) {
     hideCompanyBadge();
     return;
@@ -1066,7 +1079,12 @@ function showCompanyBadge(nodeId) {
   activeCompanyEl.classList.add('visible');
   // Show corner logo on the node
   const el = document.getElementById(nodeId);
-  if (el) el.classList.add('show-corner');
+  if (el) {
+    el.classList.add('show-corner');
+    // Update corner logo to match current brand
+    const cornerImg = el.querySelector('.corner-logo img');
+    if (cornerImg) cornerImg.src = company.logo;
+  }
 }
 
 function hideCompanyBadge() {
@@ -1399,8 +1417,9 @@ function clearShowcaseHighlights() {
 }
 
 function showcaseSleep(ms) {
+  const mult = window.flowSpeedMultiplier || 1;
   return new Promise(resolve => {
-    const id = setTimeout(() => resolve(true), ms);
+    const id = setTimeout(() => resolve(true), ms * mult);
     showcaseAbort = () => { clearTimeout(id); resolve(false); };
   });
 }
