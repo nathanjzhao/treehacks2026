@@ -46,6 +46,7 @@ dpvo_image = (
         "numba",
         "plyfile",
         "matplotlib",
+        "pycolmap>=3.10.0",
     )
     # Install lietorch (DPVO dependency — needs CUDA + g++ at build time)
     # Set TORCH_CUDA_ARCH_LIST to cover A10G/A100/H100 runtime GPUs
@@ -389,22 +390,49 @@ def run_dpvo_odometry(
     print(f"Extracted {len(frames)} frames from {frame_count} total "
           f"(interval={frame_interval}, source_fps={source_fps:.1f})")
 
-    # --- Determine calibration ---
+    # --- Determine calibration from the COLMAP reconstruction ---
     h, w = frames[0].shape[:2]
     if calib is None:
-        focal = max(h, w) * 1.2
-        calib = [focal, focal, w / 2.0, h / 2.0]
+        # Extract the SfM-optimized camera intrinsics from the reference
+        import pycolmap
+        ref_dir_tmp = tempfile.mkdtemp()
+        buf = io.BytesIO(reference_tar)
+        with tarfile.open(fileobj=buf, mode="r:gz") as tar:
+            # Only extract the sfm dir for camera params
+            members = [m for m in tar.getmembers() if m.name.startswith("sfm/")]
+            tar.extractall(ref_dir_tmp, members=members)
+        try:
+            rec = pycolmap.Reconstruction(os.path.join(ref_dir_tmp, "sfm"))
+            rec_cam = list(rec.cameras.values())[0]
+            # Extract focal length and principal point
+            # SIMPLE_RADIAL: [f, cx, cy, k1], SIMPLE_PINHOLE: [f, cx, cy]
+            params = list(rec_cam.params)
+            model_str = str(rec_cam.model)
+            if "SIMPLE" in model_str:
+                focal = params[0]
+                cx, cy = params[1], params[2]
+                calib = [focal, focal, cx, cy]
+            else:
+                calib = [params[0], params[1], params[2], params[3]]
+            print(f"Using SfM camera: model={model_str}, focal={calib[0]:.1f}")
+        except Exception as e:
+            print(f"Warning: could not read SfM camera ({e}), falling back to estimate")
+            focal = max(h, w) * 1.2
+            calib = [focal, focal, w / 2.0, h / 2.0]
     print(f"Calibration: fx={calib[0]:.1f} fy={calib[1]:.1f} cx={calib[2]:.1f} cy={calib[3]:.1f}")
 
-    # --- Localize multiple frames with HLoc for similarity alignment ---
-    # We need 2+ frames to recover scale (DPVO is monocular, scale is arbitrary)
+    # --- Localize many frames with HLoc for similarity alignment ---
+    # DPVO is monocular => scale is arbitrary and drifts over time.
+    # Localizing many frames gives Umeyama a robust fit.
     localize_fn = modal.Function.from_name("hloc-localization", "localize_frame")
 
-    # Choose frames to localize: first, middle, and last
+    # Localize every 3rd frame (gives ~10 anchors for 29 frames)
     n = len(frames)
-    anchor_indices = [0, n // 2, n - 1]
-    # Remove duplicates if video is very short
-    anchor_indices = sorted(set(anchor_indices))
+    anchor_interval = max(1, min(3, n // 4))
+    anchor_indices = list(range(0, n, anchor_interval))
+    # Always include the last frame
+    if anchor_indices[-1] != n - 1:
+        anchor_indices.append(n - 1)
 
     print(f"Localizing {len(anchor_indices)} frames with HLoc: {anchor_indices}")
     hloc_anchors = []  # list of (frame_idx, pose_dict)
@@ -513,7 +541,17 @@ def run_dpvo_odometry(
         poses, tstamps, hloc_anchors,
     )
 
-    return {
+    # Ensure all values are plain Python types (no numpy) for serialization
+    def _clean(obj):
+        if isinstance(obj, dict):
+            return {k: _clean(v) for k, v in obj.items()}
+        if isinstance(obj, (list, tuple)):
+            return [_clean(v) for v in obj]
+        if hasattr(obj, 'item'):  # numpy scalar
+            return obj.item()
+        return obj
+
+    return _clean({
         "success": True,
         "poses": world_poses,
         "anchor_pose": anchor_pose,
@@ -524,7 +562,7 @@ def run_dpvo_odometry(
         "num_dpvo_poses": len(poses),
         "dpvo_fps": len(frames) / dpvo_time,
         "dpvo_time_s": dpvo_time,
-    }
+    })
 
 
 @app.local_entrypoint()
