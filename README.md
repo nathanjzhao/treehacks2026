@@ -2,6 +2,20 @@
 
 AR scene understanding pipeline: reconstruct 3D scenes from video, localize a live camera within them, and identify/segment objects with language queries.
 
+## System Architecture
+
+<video src="assets/flowchart_dataflow.mp4" autoplay loop muted playsinline width="100%"></video>
+
+[Interactive version](backendviewer/flowchart.html) — click nodes to see video demos of each pipeline stage.
+
+**Modes:** EXPLORE (hover/click to inspect connections) · DATA FLOW (animated walkthrough of each pipeline)
+
+| Key | Action |
+|-----|--------|
+| `1` / `2` | Switch EXPLORE / DATA FLOW mode |
+| `←` / `→` | Skip between data flow paths |
+| `A` / `S` / `D` | Switch LLM to Claude / GPT-4o / Gemini |
+
 ## Camera Localization
 
 Determine where a camera is in a previously reconstructed 3D scene.
@@ -46,7 +60,3 @@ Models explored but not in the main pipeline.
 | **[android/](android/)** | Android client app. |
 | **[vic-backend/](vic-backend/)** | Backend services. |
 | **[data/](data/)** | Reference videos (`.MOV`), scene graph outputs (`.json`), and built reference maps. |
-
-## TODO
-
-- **DPVO for camera localization stability** — [DPVO](https://github.com/princeton-vl/DPVO) is a learned SLAM system that could complement hloc. hloc gives drift-free absolute poses but can fail on featureless frames; DPVO provides smooth frame-to-frame tracking. Could use hloc for initialization/keyframes and DPVO for inter-frame tracking.
