@@ -578,7 +578,7 @@ async function callLLM(
   if (!apiKey) throw new Error("OPENROUTER_API_KEY not configured");
 
   const body: Record<string, unknown> = {
-    model: "openai/gpt-4o-mini",
+    model: "openai/gpt-5-mini",
     messages,
     temperature: 0.5,
     max_tokens: 400,
@@ -613,7 +613,7 @@ async function callLLM(
   // Log token usage
   const usage = data.usage;
   if (usage) {
-    console.log(`[LLM] tokens: ${usage.prompt_tokens}in + ${usage.completion_tokens}out = ${usage.total_tokens} | cost: $${(usage.cost ?? 0).toFixed(4)} | model: gpt-4o-mini | tools: ${includeTools}`);
+    console.log(`[LLM] tokens: ${usage.prompt_tokens}in + ${usage.completion_tokens}out = ${usage.total_tokens} | cost: $${(usage.cost ?? 0).toFixed(4)} | model: gpt-5-mini | tools: ${includeTools}`);
   }
 
   return {
@@ -644,7 +644,7 @@ async function callLLMStreaming(
       "X-Title": "Mira",
     },
     body: JSON.stringify({
-      model: "openai/gpt-4o-mini",
+      model: "openai/gpt-5-mini",
       messages,
       temperature: 0.5,
       max_tokens: 400,
@@ -686,7 +686,7 @@ async function callLLMStreaming(
         // Capture usage from final chunk (OpenRouter includes it)
         if (parsed.usage) {
           const u = parsed.usage;
-          console.log(`[LLM-Stream] tokens: ${u.prompt_tokens}in + ${u.completion_tokens}out = ${u.total_tokens} | cost: $${(u.cost ?? 0).toFixed(4)} | model: gpt-4o-mini`);
+          console.log(`[LLM-Stream] tokens: ${u.prompt_tokens}in + ${u.completion_tokens}out = ${u.total_tokens} | cost: $${(u.cost ?? 0).toFixed(4)} | model: gpt-5-mini`);
         }
       } catch {
         // skip malformed chunk
