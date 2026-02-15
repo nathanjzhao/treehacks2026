@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import frameStore from "@/lib/frameStore";
 
+export const dynamic = "force-dynamic";
+export const runtime = "nodejs";
+
 export async function POST(request: NextRequest) {
   try {
     const formData = await request.formData();
@@ -14,31 +17,32 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "No image provided" }, { status: 400 });
     }
 
-    // Store latest frame in shared store
+    // Store latest frame in shared store (optimized - no extra copy)
     const arrayBuffer = await imageFile.arrayBuffer();
-    const frameData = {
+    frameStore.setFrame({
       data: Buffer.from(arrayBuffer),
       timestamp,
       width,
       height,
       frameNumber,
-    };
-
-    frameStore.setFrame(frameData);
+    });
 
     // Log every 30th frame
     if (frameNumber % 30 === 0) {
-      console.log(`[Frame] Stored frame #${frameNumber}, ${frameData.data.length} bytes, ${width}x${height}`);
+      console.log(`[Frame] Stored frame #${frameNumber}, ${arrayBuffer.byteLength} bytes, ${width}x${height}`);
     }
 
-    return NextResponse.json({
-      success: true,
-      frameNumber,
-      size: frameData.data.length,
+    // Fast response (don't wait for logging)
+    return new Response(JSON.stringify({ success: true, frameNumber }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
     });
   } catch (error) {
     console.error("[Frame] Upload error:", error);
-    return NextResponse.json({ error: "Upload failed" }, { status: 500 });
+    return new Response(JSON.stringify({ error: "Upload failed" }), {
+      status: 500,
+      headers: { "Content-Type": "application/json" },
+    });
   }
 }
 
