@@ -6,17 +6,17 @@ Video → 3D functional scene graph. Takes a video walkthrough and produces a st
 
 ```bash
 # Run pipeline (requires Modal account + OPENAI_API_KEY)
-modal run openfungraph/app.py --video-path data/IMG_4717.MOV
+modal run scenegraph/app.py --video-path data/IMG_4717.MOV
 
 # Visualize output
 pip install viser numpy jinja2 fastapi uvicorn
-python openfungraph/viewer.py data/IMG_4717.json
+python scenegraph/viewer.py data/IMG_4717.json
 ```
 
 ### Options
 
 ```
-modal run openfungraph/app.py --video-path <path> [--fps 5] [--confidence 50] [--model gpt-4o]
+modal run scenegraph/app.py --video-path <path> [--fps 5] [--confidence 50] [--model gpt-4o]
 ```
 
 - `--fps` — frame extraction rate (default 5). Lower = fewer frames, faster but less coverage.
@@ -72,8 +72,8 @@ The viser-based viewer (`viewer.py`) shows:
 - **Camera scrubber** — slider to snap to any original camera viewpoint
 
 ```bash
-python openfungraph/viewer.py data/            # browse all JSONs in directory
-python openfungraph/viewer.py data/scene.json  # open a specific file
+python scenegraph/viewer.py data/            # browse all JSONs in directory
+python scenegraph/viewer.py data/scene.json  # open a specific file
 ```
 
 ## Architecture

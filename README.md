@@ -26,7 +26,6 @@ A resident says "Where are my glasses?" → the system reconstructs their room i
 |-----|--------|
 | `1` / `2` | Switch EXPLORE / DATA FLOW mode |
 | `←` / `→` | Skip between data flow paths |
-| `A` / `S` / `D` | Switch LLM to Claude / GPT-4o / Gemini |
 
 ## Camera Localization
 
@@ -42,7 +41,7 @@ Find and segment objects in a frame, then estimate their 3D position.
 
 | Module | What it does |
 |--------|-------------|
-| **[groundedsam2/](groundedsam2/)** | Image + language query → object segmentation. Grounded SAM 2 for open-vocabulary detection and mask generation. |
+| **[segmentation/](segmentation/)** | Image + language query → object segmentation. Open-vocabulary detection and mask generation. |
 | **[depthanything/](depthanything/)** | Monocular depth estimation per frame. Used to get depth of objects segmented by SAM — use median/trimmed mean since mask edges bleed into background depth. |
 
 ## 3D Reconstruction
@@ -51,8 +50,8 @@ Build 3D scene representations from video.
 
 | Module | What it does |
 |--------|-------------|
-| **[openfungraph/](openfungraph/)** | Video → 3D scene graph. End-to-end pipeline on Modal (A100). See [openfungraph/README.md](openfungraph/README.md). |
-| **[mapanything/](mapanything/)** | Standalone MapAnything viewer/runner. Facebook's Map Anything — video → dense depth, camera poses, point clouds. |
+| **[scenegraph/](scenegraph/)** | Video → 3D scene graph. End-to-end pipeline on Modal (A100). See [scenegraph/README.md](scenegraph/README.md). |
+| **[reconstruction/](reconstruction/)** | Dense 3D reconstruction — video → dense depth, camera poses, point clouds. |
 
 ## Scratch / Experimental
 

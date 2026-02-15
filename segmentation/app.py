@@ -4,9 +4,9 @@ Grounded SAM 2 on Modal — Open-Set Object Tracking in Videos.
 Uses Grounding DINO (HuggingFace) + SAM 2.1 to detect and track objects
 in video given a text prompt. Returns annotated video + per-frame JSON masks.
 
-Deploy:  modal deploy groundedsam2/app.py
-Dev:     modal serve groundedsam2/app.py
-Run:     modal run groundedsam2/app.py --video-path data/IMG_4717.MOV --text-prompt "person. car."
+Deploy:  modal deploy segmentation/app.py
+Dev:     modal serve segmentation/app.py
+Run:     modal run segmentation/app.py --video-path data/IMG_4717.MOV --text-prompt "person. car."
 """
 
 import json
@@ -14,7 +14,7 @@ import pathlib
 
 import modal
 
-app = modal.App("groundedsam2")
+app = modal.App("segmentation")
 
 cuda_version = "12.4.0"
 flavor = "devel"
@@ -410,8 +410,8 @@ def main(
         ann_frame_idx=ann_frame_idx,
     )
 
-    # Save outputs to data/groundedsam2/
-    out_dir = pathlib.Path(__file__).parent.parent / "data" / "groundedsam2"
+    # Save outputs to data/segmentation/
+    out_dir = pathlib.Path(__file__).parent.parent / "data" / "segmentation"
     out_dir.mkdir(parents=True, exist_ok=True)
 
     out_video = out_dir / f"{p.stem}_tracked.mp4"

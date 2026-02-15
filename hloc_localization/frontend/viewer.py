@@ -5,7 +5,7 @@ Loads a GLB point cloud, connects to the localization server,
 and renders live camera frustums as poses arrive.
 
 Usage:
-  python localization/viewer.py data/mapanything/IMG_4717.glb \\
+  python localization/viewer.py data/reconstruction/IMG_4717.glb \\
     --localization-url http://localhost:8090
 """
 

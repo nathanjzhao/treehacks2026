@@ -2,7 +2,7 @@
 Convert a VGGT GLB point cloud into a demo OpenFunGraph scene graph pickle.
 Keeps original colors and point density. Clusters spatially for fake "objects".
 
-Usage: python openfungraph/make_demo.py vggt/examples/IMG_4708.glb
+Usage: python scenegraph/make_demo.py vggt/examples/IMG_4708.glb
 """
 
 import argparse

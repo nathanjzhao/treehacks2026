@@ -7,7 +7,7 @@ then backprojects object centroids into 3D world coordinates.
 Requires a pre-built HLoc reference map (from hloc_localization/backend/app.py).
 
 Run:
-  modal run groundedsam2/locate_app.py \
+  modal run segmentation/locate_app.py \
     --video-path data/IMG_4730.MOV \
     --text-prompt "painting. chair." \
     --reference-path hloc_localization/data/hloc_reference/IMG_4720/reference.tar.gz
@@ -18,7 +18,7 @@ import pathlib
 
 import modal
 
-app = modal.App("groundedsam2-locate")
+app = modal.App("segmentation-locate")
 
 cuda_version = "12.4.0"
 flavor = "devel"
@@ -668,7 +668,7 @@ def main(
         localize_fps=localize_fps,
     )
 
-    out_dir = pathlib.Path(__file__).parent.parent / "data" / "groundedsam2"
+    out_dir = pathlib.Path(__file__).parent.parent / "data" / "segmentation"
     out_dir.mkdir(parents=True, exist_ok=True)
 
     out_json = out_dir / f"{p.stem}_objects3d.json"

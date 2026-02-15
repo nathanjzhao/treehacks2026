@@ -4,8 +4,8 @@ Grounded SAM 2 + Depth Anything V2 on Modal — Object-Aware Depth.
 Detects and tracks objects via text prompt, estimates per-frame depth,
 then masks depth maps to show only the segmented objects' depth.
 
-Deploy:  modal deploy groundedsam2/depth_app.py
-Run:     modal run groundedsam2/depth_app.py --video-path data/IMG_4723.MOV --text-prompt "painting. chair."
+Deploy:  modal deploy segmentation/depth_app.py
+Run:     modal run segmentation/depth_app.py --video-path data/IMG_4723.MOV --text-prompt "painting. chair."
 """
 
 import json
@@ -13,7 +13,7 @@ import pathlib
 
 import modal
 
-app = modal.App("groundedsam2-depth")
+app = modal.App("segmentation-depth")
 
 cuda_version = "12.4.0"
 flavor = "devel"
@@ -443,7 +443,7 @@ def main(
     """
     Run object-aware depth on a video.
 
-    Outputs to data/groundedsam2/:
+    Outputs to data/segmentation/:
       - {stem}_masked_depth.mp4   (depth only on segmented objects, black bg)
       - {stem}_composite.mp4      (dimmed full depth + bright object depth + outlines)
       - {stem}_seg_depth.json     (per-frame detections)
@@ -462,7 +462,7 @@ def main(
         depth_input_size=depth_input_size,
     )
 
-    out_dir = pathlib.Path(__file__).parent.parent / "data" / "groundedsam2"
+    out_dir = pathlib.Path(__file__).parent.parent / "data" / "segmentation"
     out_dir.mkdir(parents=True, exist_ok=True)
 
     stem = p.stem

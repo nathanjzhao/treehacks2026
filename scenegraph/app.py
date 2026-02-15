@@ -3,14 +3,14 @@ OpenFunGraph on Modal — Functional 3D Scene Graphs from Video.
 
 Chains MapAnything (video → depth/poses) → OpenFunGraph (RGB-D → functional scene graph).
 
-Deploy:  modal deploy openfungraph/app.py
-Run:     modal run openfungraph/app.py --video-path ~/video.mov
+Deploy:  modal deploy scenegraph/app.py
+Run:     modal run scenegraph/app.py --video-path ~/video.mov
 """
 
 import pathlib
 import modal
 
-app = modal.App("openfungraph")
+app = modal.App("scenegraph")
 
 cuda_version = "12.4.0"
 flavor = "devel"

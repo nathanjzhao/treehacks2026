@@ -4,9 +4,9 @@ MapAnything on Modal — Universal Metric 3D Reconstruction (Meta/CMU, 2025).
 Runs inference on an A100 with model weights baked into the image.
 Accepts video + optional auxiliary geometric inputs (intrinsics, poses, depth).
 
-Deploy:  modal deploy mapanything/app.py
-Dev:     modal serve mapanything/app.py
-Video:   modal run mapanything/app.py --video-path ~/Desktop/video.mov
+Deploy:  modal deploy reconstruction/app.py
+Dev:     modal serve reconstruction/app.py
+Video:   modal run reconstruction/app.py --video-path ~/Desktop/video.mov
 """
 
 import json
@@ -14,7 +14,7 @@ import pathlib
 
 import modal
 
-app = modal.App("mapanything")
+app = modal.App("reconstruction")
 
 cuda_version = "12.4.0"
 flavor = "devel"

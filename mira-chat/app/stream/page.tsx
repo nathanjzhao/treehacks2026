@@ -5,7 +5,6 @@ import { supabase, MiraEvent } from "@/lib/supabase/client";
 import { useDetection, DetectionOverlay } from "@/yolo";
 import { Streamdown } from "streamdown";
 import CitationCard from "@/app/components/CitationCard";
-import { consumeChatSSE } from "@/lib/sse-parser";
 
 /* ================================================================
    ACTION CHAINS — scripted demos for hackathon presentation
@@ -735,6 +734,155 @@ function mapStepToIcon(label: string): string {
   return "brain";
 }
 
+interface PoseData {
+  success: boolean;
+  qw?: number;
+  qx?: number;
+  qy?: number;
+  qz?: number;
+  tx?: number;
+  ty?: number;
+  tz?: number;
+  num_inliers?: number;
+  num_correspondences?: number;
+  latency_ms?: number;
+  timestamp?: string;
+  error?: string;
+}
+
+function PoseHud({ pose, poseCount }: { pose: PoseData | null; poseCount: number }) {
+  if (!pose) {
+    return (
+      <div
+        style={{
+          background: "rgba(0,0,0,0.55)",
+          backdropFilter: "blur(20px)",
+          WebkitBackdropFilter: "blur(20px)",
+          border: "1px solid rgba(255,255,255,0.1)",
+          borderRadius: 10,
+          padding: "8px 12px",
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <div className="hud-spin" style={{ width: 12, height: 12, borderRadius: "50%", border: "1.5px solid transparent", borderTopColor: "rgba(120,180,255,0.8)", borderRightColor: "rgba(120,180,255,0.8)" }} />
+          <span style={{ fontSize: 10, fontWeight: 700, color: "rgba(120,180,255,0.6)", fontFamily: "'DM Mono', monospace", letterSpacing: "0.08em" }}>
+            LOCALIZING...
+          </span>
+        </div>
+      </div>
+    );
+  }
+
+  if (!pose.success) {
+    return (
+      <div
+        style={{
+          background: "rgba(0,0,0,0.55)",
+          backdropFilter: "blur(20px)",
+          border: "1px solid rgba(255,100,100,0.2)",
+          borderRadius: 10,
+          padding: "8px 12px",
+        }}
+      >
+        <div style={{ fontSize: 10, fontWeight: 700, color: "rgba(255,100,100,0.6)", fontFamily: "'DM Mono', monospace", letterSpacing: "0.08em" }}>
+          LOC FAILED
+        </div>
+        <div style={{ fontSize: 9, color: "rgba(255,255,255,0.3)", fontFamily: "'DM Mono', monospace", marginTop: 2 }}>
+          {pose.error || "No match"}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div
+      className="hud-fadein"
+      style={{
+        background: "rgba(0,0,0,0.55)",
+        backdropFilter: "blur(20px)",
+        WebkitBackdropFilter: "blur(20px)",
+        border: "1px solid rgba(120,180,255,0.15)",
+        borderRadius: 10,
+        overflow: "hidden",
+      }}
+    >
+      {/* Header */}
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 6,
+          padding: "6px 12px",
+          borderBottom: "1px solid rgba(120,180,255,0.08)",
+        }}
+      >
+        <div
+          style={{
+            width: 6,
+            height: 6,
+            borderRadius: "50%",
+            background: "rgba(120,180,255,0.8)",
+            boxShadow: "0 0 6px rgba(120,180,255,0.4)",
+          }}
+        />
+        <span
+          style={{
+            fontSize: 10,
+            fontWeight: 700,
+            color: "rgba(120,180,255,0.7)",
+            fontFamily: "'DM Mono', monospace",
+            letterSpacing: "0.08em",
+          }}
+        >
+          HEAD POSE
+        </span>
+        <span
+          style={{
+            fontSize: 10,
+            color: "rgba(255,255,255,0.3)",
+            fontFamily: "'DM Mono', monospace",
+            marginLeft: "auto",
+          }}
+        >
+          #{poseCount}
+        </span>
+      </div>
+
+      {/* Pose data */}
+      <div style={{ padding: "6px 12px 8px" }}>
+        {/* Position */}
+        <div style={{ display: "flex", gap: 12, marginBottom: 4 }}>
+          {[
+            { label: "X", value: pose.tx },
+            { label: "Y", value: pose.ty },
+            { label: "Z", value: pose.tz },
+          ].map(({ label, value }) => (
+            <div key={label}>
+              <span style={{ fontSize: 9, color: "rgba(120,180,255,0.5)", fontFamily: "'DM Mono', monospace" }}>
+                {label}
+              </span>
+              <span style={{ fontSize: 12, color: "rgba(255,255,255,0.8)", fontFamily: "'DM Mono', monospace", fontWeight: 500, marginLeft: 4 }}>
+                {value?.toFixed(2)}
+              </span>
+            </div>
+          ))}
+        </div>
+
+        {/* Quaternion */}
+        <div style={{ fontSize: 9, color: "rgba(255,255,255,0.25)", fontFamily: "'DM Mono', monospace", marginBottom: 4 }}>
+          q=[{pose.qw?.toFixed(3)}, {pose.qx?.toFixed(3)}, {pose.qy?.toFixed(3)}, {pose.qz?.toFixed(3)}]
+        </div>
+
+        {/* Stats */}
+        <div style={{ display: "flex", gap: 8, fontSize: 9, fontFamily: "'DM Mono', monospace", color: "rgba(255,255,255,0.3)" }}>
+          <span>{pose.num_inliers} inliers</span>
+          <span>{pose.latency_ms?.toFixed(0)}ms</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function StreamPage() {
   const [messages, setMessages] = useState<Msg[]>([]);
   const [processing, setProcessing] = useState<Processing | null>(null);
@@ -747,18 +895,22 @@ export default function StreamPage() {
   const [videoReady, setVideoReady] = useState(false);
   const [videoError, setVideoError] = useState<string | null>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
-  const videoRef = useRef<HTMLVideoElement>(null);
+  const videoRef = useRef<HTMLCanvasElement>(null);
   const pidRef = useRef(0);
-  const localPendingRef = useRef(false);
-  const [yoloEnabled, setYoloEnabled] = useState(true);
+  const [yoloEnabled, setYoloEnabled] = useState(false); // Disabled for canvas rendering
   const [viewSize, setViewSize] = useState({ w: 1920, h: 1080 });
-  const [simulateInput, setSimulateInput] = useState("");
-  const [simulateError, setSimulateError] = useState<string | null>(null);
+  const [currentPose, setCurrentPose] = useState<PoseData | null>(null);
+  const [poseCount, setPoseCount] = useState(0);
+  const [localizationEnabled, setLocalizationEnabled] = useState(false);
+  const [show3D, setShow3D] = useState(false);
 
-  // YOLO object detection on video feed
-  const { detections, inferenceMs, modelLoaded, modelError } = useDetection(videoRef, {
-    enabled: yoloEnabled && videoReady,
-  });
+  // YOLO object detection on canvas (disabled for now - needs adaptation for canvas)
+  const { detections, inferenceMs, modelLoaded, modelError } = useDetection(
+    videoRef as any, // Cast to work with canvas
+    {
+      enabled: false, // Disabled until canvas support is added
+    }
+  );
 
   useEffect(() => {
     const update = () => setViewSize({ w: window.innerWidth, h: window.innerHeight });
@@ -773,66 +925,103 @@ export default function StreamPage() {
     return () => clearInterval(t);
   }, []);
 
-  // Ray-Ban Android MJPEG stream
+  // Ray-Ban Android stream via Server-Sent Events
   useEffect(() => {
     let cancelled = false;
+    let eventSource: EventSource | null = null;
     let retryTimeout: NodeJS.Timeout;
+    const canvasRef = videoRef as React.RefObject<HTMLCanvasElement>;
 
-    function startAndroidStream() {
-      if (videoRef.current && !cancelled) {
-        console.log("[Stream] Connecting to MJPEG stream...");
+    function startStreamConnection() {
+      if (cancelled) return;
 
-        const imgElement = videoRef.current as HTMLImageElement;
+      console.log("[Stream] Connecting to SSE stream...");
 
-        // Set MJPEG stream as image source
-        imgElement.src = "/api/stream/mjpeg";
+      try {
+        eventSource = new EventSource("/api/stream/ws");
 
-        imgElement.onload = () => {
+        eventSource.onopen = () => {
           if (!cancelled) {
-            console.log("[Stream] MJPEG stream connected and ready");
-            setVideoReady(true);
+            console.log("[Stream] SSE connection established");
             setVideoError(null);
           }
         };
 
-        imgElement.onerror = (err) => {
-          if (!cancelled) {
-            console.error("[Stream] Image error:", err);
-            setVideoError("Android stream not available - retrying...");
+        eventSource.onmessage = (event) => {
+          if (cancelled) return;
 
-            // Retry after 2 seconds
-            retryTimeout = setTimeout(() => {
-              if (!cancelled) {
-                console.log("[Stream] Retrying connection...");
-                startAndroidStream();
+          try {
+            const data = JSON.parse(event.data);
+
+            if (data.type === "connected") {
+              console.log("[Stream] Connected:", data.clientId);
+              setVideoReady(true);
+            } else if (data.type === "frame") {
+              // Render frame to canvas
+              renderFrame(data);
+            } else if (data.type === "pose") {
+              // HLoc localization result
+              setCurrentPose(data as PoseData);
+              if (data.success) {
+                setPoseCount((c) => c + 1);
               }
-            }, 2000);
+            }
+          } catch (e) {
+            console.error("[Stream] Error parsing message:", e);
           }
         };
 
-        // Set a loading timeout - if not loaded after 5 seconds, retry
-        const loadTimeout = setTimeout(() => {
-          if (!cancelled && !videoReady) {
-            console.log("[Stream] Loading timeout, retrying...");
-            imgElement.src = "";
-            setTimeout(() => startAndroidStream(), 500);
-          }
-        }, 5000);
+        eventSource.onerror = (err) => {
+          if (cancelled) return;
 
-        return () => clearTimeout(loadTimeout);
+          console.error("[Stream] SSE error:", err);
+          setVideoError("Stream disconnected - retrying...");
+          setVideoReady(false);
+
+          eventSource?.close();
+
+          // Retry after 2 seconds
+          retryTimeout = setTimeout(() => {
+            if (!cancelled) {
+              console.log("[Stream] Retrying connection...");
+              startStreamConnection();
+            }
+          }, 2000);
+        };
+      } catch (e) {
+        console.error("[Stream] Failed to create EventSource:", e);
+        setVideoError("Failed to connect to stream");
       }
     }
 
-    startAndroidStream();
+    function renderFrame(frameData: any) {
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return;
+
+      // Decode base64 JPEG
+      const img = new Image();
+      img.onload = () => {
+        canvas.width = frameData.width;
+        canvas.height = frameData.height;
+        ctx.drawImage(img, 0, 0);
+      };
+      img.onerror = (err) => {
+        console.error("[Stream] Error loading frame image:", err);
+      };
+      img.src = `data:image/jpeg;base64,${frameData.jpeg_base64}`;
+    }
+
+    startStreamConnection();
 
     return () => {
       cancelled = true;
       clearTimeout(retryTimeout);
-      if (videoRef.current) {
-        (videoRef.current as HTMLImageElement).src = "";
-      }
+      eventSource?.close();
     };
-  }, [videoReady]);
+  }, [videoRef]);
 
   // Supabase realtime — mirror device chat in live mode
   useEffect(() => {
@@ -867,10 +1056,6 @@ export default function StreamPage() {
     })();
 
     // Subscribe for new events
-    // Track live steps being accumulated from CHAT_STEP events
-    let liveMid: number | null = null;
-    const liveSteps: Step[] = [];
-
     const channel = supabase
       .channel("stream-mirror")
       .on(
@@ -885,68 +1070,60 @@ export default function StreamPage() {
           const ev = payload.new as MiraEvent;
           if (ev.type === "CHAT_USER_UTTERANCE") {
             setMessages((p) => [...p, { role: "user", text: ev.receipt_text || "...", time: new Date(ev.created_at) }]);
-            // Start a new processing stepper for incoming steps
-            liveMid = ++pidRef.current;
-            liveSteps.length = 0;
-            setProcessing({ id: liveMid, steps: [], currentStep: 0, chain: { steps: [], reply: "", type: "info" }, finished: false });
-            setExpandedSteppers((p) => ({ ...p, [liveMid!]: true }));
-          } else if (ev.type === "CHAT_STEP") {
-            // Real-time step arriving — append to live stepper
-            const label = ev.receipt_text || "Processing...";
-            const pl = ev.payload as Record<string, unknown> | undefined;
-            const step: Step = {
-              label,
-              detail: pl?.detail as string | undefined,
-              searches: pl?.searches as string[] | undefined,
-              icon: mapStepToIcon(label),
-              duration: 0,
-            };
-            liveSteps.push(step);
-
-            if (liveMid === null) {
-              liveMid = ++pidRef.current;
-              setExpandedSteppers((p) => ({ ...p, [liveMid!]: true }));
-            }
-            const mid = liveMid;
-            const currentSteps = [...liveSteps];
-            setProcessing({
-              id: mid,
-              steps: currentSteps,
-              currentStep: currentSteps.length - 1,
-              chain: { steps: currentSteps, reply: "", type: "info" },
-              finished: false,
-            });
           } else if (ev.type === "CHAT_ASSISTANT_RESPONSE") {
             const pl = ev.payload as Record<string, unknown> | undefined;
-            const mid = liveMid ?? ++pidRef.current;
+            const steps = (pl?.steps as string[]) || [];
 
-            // Mark stepper as finished
-            const finalSteps = liveSteps.length > 0 ? [...liveSteps] : (pl?.steps as string[] || []).map((label: string) => ({
-              label,
-              icon: mapStepToIcon(label),
-              duration: 400,
-            }));
+            if (steps.length > 0) {
+              // Animate through steps in HUD stepper, then show reply
+              const mid = ++pidRef.current;
+              const hudSteps: Step[] = steps.map((label) => ({
+                label,
+                icon: mapStepToIcon(label),
+                duration: 400,
+              }));
+              setProcessing({ id: mid, steps: hudSteps, currentStep: 0, chain: { steps: hudSteps, reply: "", type: "info" }, finished: false });
+              setExpandedSteppers((p) => ({ ...p, [mid]: true }));
 
-            setProcessing((p) => (p && p.id === mid ? { ...p, finished: true } : p));
-            setTimeout(() => {
-              setMessages((p) => [
-                ...p,
-                ...(finalSteps.length > 0 ? [{ role: "thinking" as const, steps: finalSteps as Step[], id: mid, time: new Date() }] : []),
-                {
-                  role: "assistant" as const,
-                  text: ev.receipt_text || "...",
-                  type: pl?.action === "ESCALATE" ? "escalation" : pl?.action === "FIND_OBJECT" ? "object_found" : "info",
-                  citations: pl?.citations as AssistantMsg["citations"],
-                  time: new Date(ev.created_at),
-                },
-              ]);
-              setExpandedSteppers((p) => ({ ...p, [mid]: false }));
-              setProcessing(null);
-            }, 1500);
-
-            // Reset live tracking
-            liveMid = null;
-            liveSteps.length = 0;
+              // Animate through steps with visible pacing
+              let si = 0;
+              const advance = () => {
+                if (si < hudSteps.length) {
+                  si++;
+                  setTimeout(() => {
+                    setProcessing((p) => (p && p.id === mid ? { ...p, currentStep: si } : p));
+                    advance();
+                  }, 800);
+                } else {
+                  setProcessing((p) => (p && p.id === mid ? { ...p, finished: true } : p));
+                  setTimeout(() => {
+                    setMessages((p) => [
+                      ...p,
+                      { role: "thinking" as const, steps: hudSteps, id: mid, time: new Date() },
+                      {
+                        role: "assistant" as const,
+                        text: ev.receipt_text || "...",
+                        type: pl?.action === "ESCALATE" ? "escalation" : pl?.action === "FIND_OBJECT" ? "object_found" : "info",
+                        citations: pl?.citations as AssistantMsg["citations"],
+                        time: new Date(ev.created_at),
+                      },
+                    ]);
+                    setExpandedSteppers((p) => ({ ...p, [mid]: false }));
+                    setProcessing(null);
+                  }, 2000);
+                }
+              };
+              advance();
+            } else {
+              // No steps — just show the reply
+              setMessages((p) => [...p, {
+                role: "assistant",
+                text: ev.receipt_text || "...",
+                type: pl?.action === "ESCALATE" ? "escalation" : pl?.action === "FIND_OBJECT" ? "object_found" : "info",
+                citations: pl?.citations as AssistantMsg["citations"],
+                time: new Date(ev.created_at),
+              }]);
+            }
 
             if (pl?.action === "ESCALATE") {
               setShowEscalation(true);
@@ -1086,10 +1263,9 @@ export default function StreamPage() {
 
       {/* ──── VIDEO BACKGROUND (Ray-Ban Android stream) ──── */}
       <div style={{ position: "absolute", inset: 0, zIndex: 0 }}>
-        {/* Live MJPEG stream from Ray-Ban via Android */}
-        <img
-          ref={videoRef as any}
-          alt="Ray-Ban stream"
+        {/* Live stream from Ray-Ban via Android (SSE + Canvas) */}
+        <canvas
+          ref={videoRef as React.RefObject<HTMLCanvasElement>}
           style={{
             position: "absolute",
             inset: 0,
@@ -1119,12 +1295,12 @@ export default function StreamPage() {
         <div style={{ position: "absolute", inset: 0, opacity: 0.03, backgroundImage: "linear-gradient(rgba(120,255,200,0.3) 1px, transparent 1px), linear-gradient(90deg, rgba(120,255,200,0.3) 1px, transparent 1px)", backgroundSize: "60px 60px", animation: "hud-grid-pulse 4s ease-in-out infinite" }} />
         {/* Film grain */}
         <div style={{ position: "absolute", inset: 0, opacity: 0.08, mixBlendMode: "overlay", background: "url(\"data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E\")" }} />
-        {/* YOLO detection overlay */}
-        {videoReady && videoRef.current && (
+        {/* YOLO detection overlay - disabled for canvas mode */}
+        {videoReady && videoRef.current && yoloEnabled && (
           <DetectionOverlay
             detections={detections}
-            videoWidth={(videoRef.current as any).videoWidth || (videoRef.current as any).naturalWidth || 1920}
-            videoHeight={(videoRef.current as any).videoHeight || (videoRef.current as any).naturalHeight || 1080}
+            videoWidth={videoRef.current.width || 1920}
+            videoHeight={videoRef.current.height || 1080}
             canvasWidth={viewSize.w}
             canvasHeight={viewSize.h}
             inferenceMs={inferenceMs}
@@ -1199,44 +1375,82 @@ export default function StreamPage() {
           <div>IMU: stable · GPS: 37.4275°N</div>
           <div>BATT: 72% · TEMP: 68°F</div>
         </div>
-        <button
-          onClick={() => { setLiveMode((p) => !p); setMessages([]); setProcessing(null); }}
-          style={{
-            marginTop: 10,
-            padding: "8px 20px",
-            fontSize: 13,
-            fontFamily: "'DM Mono', monospace",
-            fontWeight: 600,
-            letterSpacing: "0.05em",
-            color: liveMode ? "rgba(120,255,200,0.9)" : "rgba(255,255,255,0.4)",
-            background: liveMode ? "rgba(120,255,200,0.1)" : "rgba(255,255,255,0.05)",
-            border: `1px solid ${liveMode ? "rgba(120,255,200,0.3)" : "rgba(255,255,255,0.1)"}`,
-            borderRadius: 6,
-            cursor: "pointer",
-            transition: "all 0.2s",
-          }}
-        >
-          {liveMode ? "● LIVE" : "○ DEMO"}
-        </button>
-        <button
-          onClick={() => setYoloEnabled((p) => !p)}
-          style={{
-            marginTop: 6,
-            padding: "8px 20px",
-            fontSize: 13,
-            fontFamily: "'DM Mono', monospace",
-            fontWeight: 600,
-            letterSpacing: "0.05em",
-            color: yoloEnabled ? "rgba(120,255,200,0.9)" : "rgba(255,255,255,0.4)",
-            background: yoloEnabled ? "rgba(120,255,200,0.1)" : "rgba(255,255,255,0.05)",
-            border: `1px solid ${yoloEnabled ? "rgba(120,255,200,0.3)" : "rgba(255,255,255,0.1)"}`,
-            borderRadius: 6,
-            cursor: "pointer",
-            transition: "all 0.2s",
-          }}
-        >
-          {yoloEnabled ? "◉ YOLO" : "○ YOLO"}
-        </button>
+        <div style={{ display: "flex", gap: 6, marginTop: 10 }}>
+          <button
+            onClick={() => { setLiveMode((p) => !p); setMessages([]); setProcessing(null); }}
+            style={{
+              padding: "8px 20px",
+              fontSize: 13,
+              fontFamily: "'DM Mono', monospace",
+              fontWeight: 600,
+              letterSpacing: "0.05em",
+              color: liveMode ? "rgba(120,255,200,0.9)" : "rgba(255,255,255,0.4)",
+              background: liveMode ? "rgba(120,255,200,0.1)" : "rgba(255,255,255,0.05)",
+              border: `1px solid ${liveMode ? "rgba(120,255,200,0.3)" : "rgba(255,255,255,0.1)"}`,
+              borderRadius: 6,
+              cursor: "pointer",
+              transition: "all 0.2s",
+            }}
+          >
+            {liveMode ? "● LIVE" : "○ DEMO"}
+          </button>
+          <button
+            onClick={() => setLocalizationEnabled((p) => !p)}
+            style={{
+              padding: "8px 20px",
+              fontSize: 13,
+              fontFamily: "'DM Mono', monospace",
+              fontWeight: 600,
+              letterSpacing: "0.05em",
+              color: localizationEnabled ? "rgba(120,180,255,0.9)" : "rgba(255,255,255,0.4)",
+              background: localizationEnabled ? "rgba(120,180,255,0.1)" : "rgba(255,255,255,0.05)",
+              border: `1px solid ${localizationEnabled ? "rgba(120,180,255,0.3)" : "rgba(255,255,255,0.1)"}`,
+              borderRadius: 6,
+              cursor: "pointer",
+              transition: "all 0.2s",
+            }}
+          >
+            {localizationEnabled ? "◉ LOC" : "○ LOC"}
+          </button>
+          <button
+            onClick={() => setShow3D((p) => !p)}
+            style={{
+              padding: "8px 20px",
+              fontSize: 13,
+              fontFamily: "'DM Mono', monospace",
+              fontWeight: 600,
+              letterSpacing: "0.05em",
+              color: show3D ? "rgba(200,160,255,0.9)" : "rgba(255,255,255,0.4)",
+              background: show3D ? "rgba(200,160,255,0.1)" : "rgba(255,255,255,0.05)",
+              border: `1px solid ${show3D ? "rgba(200,160,255,0.3)" : "rgba(255,255,255,0.1)"}`,
+              borderRadius: 6,
+              cursor: "pointer",
+              transition: "all 0.2s",
+            }}
+          >
+            {show3D ? "◉ 3D" : "○ 3D"}
+          </button>
+        </div>
+        <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
+          <button
+            onClick={() => setYoloEnabled((p) => !p)}
+            style={{
+              padding: "8px 20px",
+              fontSize: 13,
+              fontFamily: "'DM Mono', monospace",
+              fontWeight: 600,
+              letterSpacing: "0.05em",
+              color: yoloEnabled ? "rgba(120,255,200,0.9)" : "rgba(255,255,255,0.4)",
+              background: yoloEnabled ? "rgba(120,255,200,0.1)" : "rgba(255,255,255,0.05)",
+              border: `1px solid ${yoloEnabled ? "rgba(120,255,200,0.3)" : "rgba(255,255,255,0.1)"}`,
+              borderRadius: 6,
+              cursor: "pointer",
+              transition: "all 0.2s",
+            }}
+          >
+            {yoloEnabled ? "◉ YOLO" : "○ YOLO"}
+          </button>
+        </div>
         {modelLoaded && (
           <div style={{ marginTop: 4, fontSize: 9, fontFamily: "'DM Mono', monospace", color: "rgba(120,255,200,0.4)" }}>
             YOLOv8n · {detections.length} obj · {inferenceMs}ms
@@ -1248,6 +1462,22 @@ export default function StreamPage() {
           </div>
         )}
       </div>
+
+      {/* ──── Pose HUD ──── */}
+      {localizationEnabled && (
+        <div
+          className="hud-fadein"
+          style={{
+            position: "absolute",
+            top: show3D ? 80 : 80,
+            left: show3D ? "calc(50% - 10px)" : 56,
+            width: 240,
+            zIndex: 19,
+          }}
+        >
+          <PoseHud pose={currentPose} poseCount={poseCount} />
+        </div>
+      )}
 
       {/* ──── LEFT: Activity Feed ──── */}
       {processing && (
@@ -1269,145 +1499,57 @@ export default function StreamPage() {
         </div>
       )}
 
-      {/* ──── CHAT OVERLAY ──── */}
-      <div style={{ position: "absolute", bottom: 28, right: 28, top: 80, width: 440, zIndex: 20, display: "flex", flexDirection: "column" }}>
-        {/* Live mode: simulate Android transcript — injects into same flow as real device */}
-        {liveMode && (
+      {/* ──── 3D POINT CLOUD VIEWER (viser iframe) ──── */}
+      {show3D && (
+        <div
+          className="hud-fadein"
+          style={{
+            position: "absolute",
+            top: 80,
+            left: 56,
+            width: "calc(50% - 80px)",
+            bottom: 200,
+            zIndex: 18,
+            borderRadius: 12,
+            overflow: "hidden",
+            border: "1px solid rgba(200,160,255,0.25)",
+            background: "rgba(0,0,0,0.7)",
+          }}
+        >
+          {/* Header bar */}
           <div
             style={{
-              flexShrink: 0,
-              padding: "10px 0 12px",
-              borderBottom: "1px solid rgba(255,255,255,0.1)",
-              marginBottom: 8,
               display: "flex",
-              flexDirection: "column",
-              gap: 8,
+              alignItems: "center",
+              gap: 6,
+              padding: "6px 12px",
+              background: "rgba(0,0,0,0.6)",
+              borderBottom: "1px solid rgba(200,160,255,0.15)",
             }}
           >
-            <div style={{ fontSize: 10, fontFamily: "'DM Mono', monospace", color: "rgba(120,255,200,0.8)", fontWeight: 700, letterSpacing: "0.08em" }}>
-              SIMULATE ANDROID TRANSCRIPT
-            </div>
-            <form
-              onSubmit={(e) => {
-                e.preventDefault();
-                setSimulateError(null);
-                const raw = simulateInput.trim();
-                if (!processing && raw) {
-                  setSimulateInput("");
-                  setMessages((p) => [...p, { role: "user", text: raw, time: new Date() }]);
-                  localPendingRef.current = true;
-
-                  // Use SSE stream so tool call steps show in real-time
-                  const mid = ++pidRef.current;
-                  const hudSteps: Step[] = [];
-                  setProcessing({ id: mid, steps: hudSteps, currentStep: 0, chain: { steps: hudSteps, reply: "", type: "info" }, finished: false });
-                  setExpandedSteppers((p) => ({ ...p, [mid]: true }));
-
-                  consumeChatSSE(DEMO_PATIENT_ID, raw, {
-                    onStep: (ev) => {
-                      hudSteps.push({
-                        label: ev.label,
-                        detail: ev.detail,
-                        searches: ev.searches,
-                        icon: mapStepToIcon(ev.label),
-                        duration: 0,
-                      });
-                      setProcessing((p) =>
-                        p && p.id === mid
-                          ? { ...p, steps: [...hudSteps], currentStep: hudSteps.length - 1 }
-                          : p
-                      );
-                    },
-                    onStepDone: (ev) => {
-                      setProcessing((p) =>
-                        p && p.id === mid
-                          ? { ...p, currentStep: Math.max(p.currentStep, ev.index + 1) }
-                          : p
-                      );
-                    },
-                    onText: () => {
-                      // text chunks arrive during streaming — we'll show the final reply via onResult
-                    },
-                    onResult: (ev) => {
-                      localPendingRef.current = false;
-                      setProcessing((p) => (p && p.id === mid ? { ...p, finished: true } : p));
-                      setTimeout(() => {
-                        setMessages((p) => [
-                          ...p,
-                          { role: "thinking" as const, steps: hudSteps, id: mid, time: new Date() },
-                          {
-                            role: "assistant" as const,
-                            text: ev.reply || "Done.",
-                            type: ev.action === "ESCALATE" ? "escalation" : ev.action === "FIND_OBJECT" ? "object_found" : "info",
-                            citations: ev.citations,
-                            time: new Date(),
-                          },
-                        ]);
-                        setExpandedSteppers((p) => ({ ...p, [mid]: false }));
-                        setProcessing(null);
-                        if (ev.action === "ESCALATE") {
-                          setShowEscalation(true);
-                          setTimeout(() => setShowEscalation(false), 4000);
-                        }
-                      }, 600);
-                    },
-                    onError: (err) => {
-                      localPendingRef.current = false;
-                      setProcessing(null);
-                      setSimulateError(err.message);
-                    },
-                  });
-                }
-              }}
-              style={{ display: "flex", flexDirection: "column", gap: 6 }}
-            >
-              <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-              <input
-                type="text"
-                value={simulateInput}
-                onChange={(e) => setSimulateInput(e.target.value)}
-                placeholder="Type text as if from device…"
-                disabled={!!processing}
-                style={{
-                  flex: 1,
-                  border: "1px solid rgba(120,255,200,0.35)",
-                  outline: "none",
-                  borderRadius: 10,
-                  padding: "10px 14px",
-                  fontSize: 14,
-                  color: "rgba(255,255,255,0.9)",
-                  fontFamily: "inherit",
-                  background: "rgba(0,0,0,0.5)",
-                  backdropFilter: "blur(12px)",
-                }}
-              />
-              <button
-                type="submit"
-                disabled={!!processing || !simulateInput.trim()}
-                style={{
-                  padding: "10px 18px",
-                  borderRadius: 10,
-                  border: "1px solid rgba(120,255,200,0.4)",
-                  background: simulateInput.trim() && !processing ? "rgba(120,255,200,0.2)" : "rgba(255,255,255,0.06)",
-                  color: simulateInput.trim() && !processing ? "rgba(120,255,200,1)" : "rgba(255,255,255,0.4)",
-                  fontSize: 13,
-                  fontFamily: "'DM Mono', monospace",
-                  fontWeight: 600,
-                  letterSpacing: "0.04em",
-                  cursor: simulateInput.trim() && !processing ? "pointer" : "default",
-                }}
-              >
-                Inject
-              </button>
-              </div>
-              {simulateError && (
-                <div style={{ fontSize: 11, color: "rgba(255,120,100,0.9)", fontFamily: "'DM Mono', monospace" }}>
-                  {simulateError}
-                </div>
-              )}
-            </form>
+            <div style={{ width: 6, height: 6, borderRadius: "50%", background: "rgba(200,160,255,0.8)" }} />
+            <span style={{ fontSize: 10, fontWeight: 700, color: "rgba(200,160,255,0.7)", fontFamily: "'DM Mono', monospace", letterSpacing: "0.08em" }}>
+              3D SCENE
+            </span>
+            <span style={{ fontSize: 9, color: "rgba(255,255,255,0.3)", fontFamily: "'DM Mono', monospace", marginLeft: "auto" }}>
+              viser · localhost:8082
+            </span>
           </div>
-        )}
+          <iframe
+            src="http://localhost:8082"
+            style={{
+              width: "100%",
+              height: "calc(100% - 28px)",
+              border: "none",
+              background: "#111",
+            }}
+            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope"
+          />
+        </div>
+      )}
+
+      {/* ──── CHAT OVERLAY ──── */}
+      <div style={{ position: "absolute", bottom: 28, right: 28, top: 80, width: 440, zIndex: 20, display: "flex", flexDirection: "column" }}>
         <div style={{ flex: 1, overflowY: "auto", display: "flex", flexDirection: "column", gap: 8, paddingBottom: 8 }}>
           <div style={{ flex: 1 }} />
           {messages.map((msg, i) => {
@@ -1490,7 +1632,7 @@ export default function StreamPage() {
 
         {liveMode ? (
           /* Live mode: mirroring indicator */
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8, padding: "12px 0", flexShrink: 0 }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8, padding: "12px 0" }}>
             <div style={{ width: 8, height: 8, borderRadius: "50%", background: "rgba(120,255,200,0.8)", animation: "hud-pulse-kf 1.5s ease-in-out infinite" }} />
             <span style={{ fontSize: 12, fontFamily: "'DM Mono', monospace", color: "rgba(120,255,200,0.7)", fontWeight: 500, letterSpacing: "0.05em", textShadow: "0 1px 3px rgba(0,0,0,0.6)" }}>
               MIRRORING DEVICE CHAT

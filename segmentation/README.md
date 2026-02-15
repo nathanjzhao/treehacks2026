@@ -7,7 +7,7 @@ Give it a video and a text prompt, get back an annotated video with tracked boun
 ## Usage
 
 ```bash
-modal run groundedsam2/app.py --video-path data/IMG_4723.MOV --text-prompt "book. door. painting."
+modal run segmentation/app.py --video-path data/IMG_4723.MOV --text-prompt "book. door. painting."
 ```
 
 Outputs `_tracked.mp4` and `_detections.json` next to the input file.
@@ -24,10 +24,10 @@ Outputs `_tracked.mp4` and `_detections.json` next to the input file.
 
 ```bash
 # More detections (lower thresholds)
-modal run groundedsam2/app.py --video-path vid.mov --text-prompt "chair. lamp. door." --box-threshold 0.25
+modal run segmentation/app.py --video-path vid.mov --text-prompt "chair. lamp. door." --box-threshold 0.25
 
 # Detect from a later frame
-modal run groundedsam2/app.py --video-path vid.mov --text-prompt "person." --ann-frame-idx 30
+modal run segmentation/app.py --video-path vid.mov --text-prompt "person." --ann-frame-idx 30
 ```
 
 ### Batch (parallel)
@@ -35,20 +35,20 @@ modal run groundedsam2/app.py --video-path vid.mov --text-prompt "person." --ann
 Process all `data/*.MOV` files in parallel across separate A100s:
 
 ```bash
-modal run groundedsam2/run_batch.py --text-prompt "book. door. painting. chair."
+modal run segmentation/run_batch.py --text-prompt "book. door. painting. chair."
 ```
 
-Results go to `data/groundedsam2/`.
+Results go to `data/segmentation/`.
 
 ## Object-Aware Depth
 
 Combines Grounded SAM 2 tracking with [Depth Anything V2](https://github.com/DepthAnything/Depth-Anything-V2) to get depth maps masked to only the segmented objects.
 
 ```bash
-modal run groundedsam2/depth_app.py --video-path data/IMG_4723.MOV --text-prompt "painting. chair. lamp. door."
+modal run segmentation/depth_app.py --video-path data/IMG_4723.MOV --text-prompt "painting. chair. lamp. door."
 ```
 
-Outputs to `data/groundedsam2/`:
+Outputs to `data/segmentation/`:
 - `{stem}_masked_depth.mp4` — depth colormap only where objects are, black elsewhere
 - `{stem}_composite.mp4` — full depth dimmed to 20%, objects at full brightness with colored outlines + labels
 - `{stem}_seg_depth.json` — per-frame detection metadata
@@ -58,7 +58,7 @@ Outputs to `data/groundedsam2/`:
 Three-panel playback (Original | Object Depth | Composite):
 
 ```bash
-python groundedsam2/depth_viewer.py data/groundedsam2/ --source-dir data/
+python segmentation/depth_viewer.py data/segmentation/ --source-dir data/
 # Open http://localhost:8080
 ```
 
@@ -71,26 +71,26 @@ Combines all three systems (Grounded SAM 2 + Depth Anything V2 + HLoc) to predic
 Requires a pre-built HLoc reference (see `hloc_localization/`).
 
 ```bash
-modal run groundedsam2/locate_app.py \
+modal run segmentation/locate_app.py \
   --video-path data/IMG_4730.MOV \
   --text-prompt "painting. chair. lamp. door." \
   --reference-path hloc_localization/data/hloc_reference/IMG_4720/reference.tar.gz \
   --localize-fps 2
 ```
 
-Outputs `{stem}_objects3d.json` to `data/groundedsam2/` with per-object 3D positions, camera poses, and metadata.
+Outputs `{stem}_objects3d.json` to `data/segmentation/` with per-object 3D positions, camera poses, and metadata.
 
 ### 3D Viewer
 
 Viser-based viewer with smooth camera path playback, object highlighting on the point cloud, and video panels (source, segmentation, depth):
 
 ```bash
-python groundedsam2/locate_viewer.py \
-  data/mapanything/IMG_4720.glb \
-  data/groundedsam2/IMG_4730_objects3d.json \
+python segmentation/locate_viewer.py \
+  data/reconstruction/IMG_4720.glb \
+  data/segmentation/IMG_4730_objects3d.json \
   --reference hloc_localization/data/hloc_reference/IMG_4720/reference.tar.gz \
   --video data/IMG_4730.MOV \
-  --results-dir data/groundedsam2/
+  --results-dir data/segmentation/
 # Open http://localhost:8890
 ```
 
