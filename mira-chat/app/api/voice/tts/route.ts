@@ -20,10 +20,11 @@ export async function POST(request: NextRequest) {
         Authorization: `Bearer ${apiKey}`,
         "Content-Type": "application/json",
       },
+      // marin/cedar require gpt-4o-mini-tts; tts-1 only supports alloy, echo, fable, onyx, nova, shimmer
       body: JSON.stringify({
-        model: "tts-1",
+        model: "gpt-4o-mini-tts",
+        voice: "marin",
         input: text,
-        voice: "nova",
         response_format: "mp3",
       }),
     });
