@@ -36,6 +36,11 @@ class StreamingPreferencesDataStore(private val context: Context) {
         val COMPUTER_PORT = intPreferencesKey("computer_port")
         val COMPUTER_ENABLED = booleanPreferencesKey("computer_enabled")
 
+        // Computer 2 endpoint
+        val COMPUTER2_IP = stringPreferencesKey("computer2_ip")
+        val COMPUTER2_PORT = intPreferencesKey("computer2_port")
+        val COMPUTER2_ENABLED = booleanPreferencesKey("computer2_enabled")
+
         // Cloud endpoint
         val CLOUD_BASE_URL = stringPreferencesKey("cloud_base_url")
         val CLOUD_USER_ID = stringPreferencesKey("cloud_user_id")
@@ -66,6 +71,11 @@ class StreamingPreferencesDataStore(private val context: Context) {
                     port = preferences[PreferencesKeys.COMPUTER_PORT] ?: 8080,
                     enabled = preferences[PreferencesKeys.COMPUTER_ENABLED] ?: false
                 ),
+                computer2 = ComputerEndpoint(
+                    ip = preferences[PreferencesKeys.COMPUTER2_IP] ?: "172.20.10.1",
+                    port = preferences[PreferencesKeys.COMPUTER2_PORT] ?: 8080,
+                    enabled = preferences[PreferencesKeys.COMPUTER2_ENABLED] ?: false
+                ),
                 cloud = CloudEndpoint(
                     baseUrl = preferences[PreferencesKeys.CLOUD_BASE_URL]
                         ?: "https://memory-backend-328251955578.us-east1.run.app",
@@ -90,6 +100,18 @@ class StreamingPreferencesDataStore(private val context: Context) {
             preferences[PreferencesKeys.COMPUTER_ENABLED] = endpoint.enabled
         }
         StreamingLogger.info("DataStore", "Computer endpoint updated: ${endpoint.ip}:${endpoint.port}, enabled=${endpoint.enabled}")
+    }
+
+    /**
+     * Update computer 2 endpoint configuration
+     */
+    suspend fun updateComputer2Endpoint(endpoint: ComputerEndpoint) {
+        context.streamingDataStore.edit { preferences ->
+            preferences[PreferencesKeys.COMPUTER2_IP] = endpoint.ip
+            preferences[PreferencesKeys.COMPUTER2_PORT] = endpoint.port
+            preferences[PreferencesKeys.COMPUTER2_ENABLED] = endpoint.enabled
+        }
+        StreamingLogger.info("DataStore", "Computer 2 endpoint updated: ${endpoint.ip}:${endpoint.port}, enabled=${endpoint.enabled}")
     }
 
     /**

@@ -52,6 +52,7 @@ data class StreamingSettings(
 @Serializable
 data class StreamingConfiguration(
     val computer: ComputerEndpoint = ComputerEndpoint(),
+    val computer2: ComputerEndpoint = ComputerEndpoint(),
     val cloud: CloudEndpoint = CloudEndpoint(),
     val settings: StreamingSettings = StreamingSettings()
 )
@@ -61,12 +62,15 @@ data class StreamingConfiguration(
  */
 data class StreamingStats(
     val computerFps: Float = 0f,
+    val computer2Fps: Float = 0f,
     val cloudFps: Float = 0f,
     val bandwidthKBps: Float = 0f,
     val droppedFrames: Int = 0,
     val computerLatency: Long = 0, // Average upload time in ms
+    val computer2Latency: Long = 0, // Average upload time in ms
     val cloudLatency: Long = 0, // Average upload time in ms
     val computerStatus: ConnectionStatus = ConnectionStatus.DISCONNECTED,
+    val computer2Status: ConnectionStatus = ConnectionStatus.DISCONNECTED,
     val cloudStatus: ConnectionStatus = ConnectionStatus.DISCONNECTED,
     val uptimeSeconds: Long = 0
 )

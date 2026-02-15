@@ -228,6 +228,7 @@ fun StreamingStatusBadge(
         ) {
             // Status indicator
             val isStreaming = stats.computerStatus == com.meta.wearable.dat.externalsampleapps.cameraaccess.streaming.ConnectionStatus.CONNECTED ||
+                    stats.computer2Status == com.meta.wearable.dat.externalsampleapps.cameraaccess.streaming.ConnectionStatus.CONNECTED ||
                     stats.cloudStatus == com.meta.wearable.dat.externalsampleapps.cameraaccess.streaming.ConnectionStatus.CONNECTED
 
             androidx.compose.foundation.Canvas(
@@ -244,7 +245,10 @@ fun StreamingStatusBadge(
                     append("Streaming: ")
                     val destinations = mutableListOf<String>()
                     if (stats.computerStatus == com.meta.wearable.dat.externalsampleapps.cameraaccess.streaming.ConnectionStatus.CONNECTED) {
-                        destinations.add("Computer")
+                        destinations.add("PC1")
+                    }
+                    if (stats.computer2Status == com.meta.wearable.dat.externalsampleapps.cameraaccess.streaming.ConnectionStatus.CONNECTED) {
+                        destinations.add("PC2")
                     }
                     if (stats.cloudStatus == com.meta.wearable.dat.externalsampleapps.cameraaccess.streaming.ConnectionStatus.CONNECTED) {
                         destinations.add("Cloud")
