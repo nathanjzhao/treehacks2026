@@ -4,7 +4,7 @@ AR scene understanding pipeline: reconstruct 3D scenes from video, localize a li
 
 ## System Architecture
 
-<video src="https://github.com/nathanjzhao/treehacks2026/raw/main/assets/flowchart_dataflow.mp4" autoplay loop muted playsinline width="100%"></video>
+<video src="https://github.com/user-attachments/assets/c82e9f8e-386f-403d-b41b-c13b9c0d5853" autoplay loop muted playsinline width="100%"></video>
 
 [Interactive version](backendviewer/flowchart.html) — click nodes to see video demos of each pipeline stage.
 
