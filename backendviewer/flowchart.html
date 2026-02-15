@@ -214,11 +214,138 @@
   .legend .swatch.dashed {
     background: repeating-linear-gradient(90deg, #252838 0 6px, transparent 6px 10px);
   }
-  .legend .swatch.particle {
-    width: 6px; height: 6px;
-    border-radius: 50%;
-    background: var(--cyan);
+  /* Flow animation mode */
+  .node.flow-active {
+    border-color: var(--cyan) !important;
+    box-shadow: 0 0 24px rgba(6,182,212,0.25), 0 0 48px rgba(6,182,212,0.08) !important;
+    transform: scale(1.05);
+    z-index: 12;
   }
+  .node.flow-visited {
+    border-color: rgba(6,182,212,0.35) !important;
+    box-shadow: 0 0 12px rgba(6,182,212,0.1) !important;
+  }
+  .node.flow-dimmed {
+    opacity: 0.12 !important;
+  }
+  .edge-line.flow-lit {
+    stroke: rgba(6,182,212,0.7) !important;
+    stroke-width: 2.5 !important;
+    opacity: 1 !important;
+  }
+  .edge-line.flow-lit-trail {
+    stroke: rgba(6,182,212,0.3) !important;
+    stroke-width: 2 !important;
+    opacity: 1 !important;
+  }
+  .edge-line.flow-dimmed {
+    opacity: 0.05 !important;
+  }
+
+  .mode-toggle {
+    position: fixed;
+    top: 16px;
+    right: 24px;
+    z-index: 100;
+    display: flex;
+    gap: 0;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+  }
+  .mode-toggle button {
+    padding: 8px 16px;
+    border: 1px solid #252838;
+    background: var(--node-bg);
+    color: var(--text-dim);
+    cursor: pointer;
+    transition: all 0.25s;
+  }
+  .mode-toggle button:first-child { border-radius: 6px 0 0 6px; }
+  .mode-toggle button:last-child { border-radius: 0 6px 6px 0; border-left: none; }
+  .mode-toggle button.active {
+    background: rgba(6,182,212,0.1);
+    border-color: var(--cyan);
+    color: var(--cyan);
+  }
+
+
+  .flow-nav {
+    position: fixed;
+    bottom: 24px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 100;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    font-family: 'JetBrains Mono', monospace;
+    opacity: 0;
+    transition: opacity 0.4s;
+    pointer-events: none;
+  }
+  .flow-nav.visible { opacity: 1; pointer-events: auto; }
+  .flow-nav .flow-name {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--cyan);
+    background: rgba(6,182,212,0.06);
+    border: 1px solid rgba(6,182,212,0.2);
+    border-radius: 8px;
+    padding: 8px 20px;
+    white-space: nowrap;
+  }
+  .flow-nav .flow-counter {
+    font-size: 9px;
+    color: var(--text-dim);
+    white-space: nowrap;
+  }
+  .flow-nav .flow-keys {
+    display: flex;
+    gap: 4px;
+  }
+  .flow-nav .key {
+    font-size: 9px;
+    color: var(--text-dim);
+    border: 1px solid #252838;
+    border-radius: 4px;
+    padding: 3px 7px;
+    background: var(--node-bg);
+    line-height: 1;
+  }
+
+  /* Brand badges */
+  .node .brand {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    margin-top: 2px;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 8px;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+    line-height: 1.4;
+  }
+  .brand.modal       { background: rgba(83,180,126,0.12); color: #53b47e; }
+  .brand.meta        { background: rgba(6,104,225,0.12);  color: #4a9af5; }
+  .brand.openai      { background: rgba(255,255,255,0.08); color: #e4e8f4; }
+  .brand.anthropic   { background: rgba(217,119,87,0.15); color: #d97757; }
+  .brand.gemini      { background: rgba(66,133,244,0.12); color: #4285f4; }
+  .brand.perplexity  { background: rgba(32,128,141,0.15); color: #20808d; }
+  .brand.openevidence { background: rgba(100,160,255,0.12); color: #64a0ff; }
+  .brand.whisper     { background: rgba(255,255,255,0.06); color: #a0a8c0; }
+  .brand.cartesia    { background: rgba(168,85,247,0.12); color: #a855f7; }
+
+  .brand .brand-dot {
+    width: 5px; height: 5px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+
   .legend .source-swatch {
     width: 14px; height: 14px;
     border-radius: 4px;
@@ -238,6 +365,16 @@
 <div class="title-bar">
   <div class="dot"></div>
   AR-Assisted Care — System Architecture
+</div>
+
+<div class="mode-toggle">
+  <button id="btn-explore" class="active">EXPLORE</button>
+  <button id="btn-flow">DATA FLOW</button>
+</div>
+<div class="flow-nav" id="flowNav">
+  <div class="flow-keys"><span class="key">←</span><span class="key">→</span></div>
+  <div class="flow-name" id="flowLabel"></div>
+  <div class="flow-counter" id="flowCounter"></div>
 </div>
 
 <div class="chart-container" id="chart">
@@ -264,6 +401,7 @@
   <div class="node glow-red" id="glasses" style="left:460px; top:20px; width:220px;">
     <span class="icon">🕶️</span>
     <span class="label">Meta Ray-Ban Glasses</span>
+    <span class="brand meta"><span class="brand-dot" style="background:#4a9af5"></span>Meta</span>
   </div>
 
   <div class="node glow-red" id="video" style="left:260px; top:135px; width:140px;">
@@ -280,28 +418,34 @@
     <span class="icon">🏗️</span>
     <span class="label">3D Reconstruction</span>
     <span class="sub">SfM / DUSt3R</span>
+    <span class="brand modal"><span class="brand-dot" style="background:#53b47e"></span>Modal</span>
   </div>
   <div class="node glow-blue" id="objdet" style="left:205px; top:290px; width:130px;">
     <span class="icon">🏷️</span>
     <span class="label">Object Detection</span>
     <span class="sub">Grounding DINO</span>
+    <span class="brand modal"><span class="brand-dot" style="background:#53b47e"></span>Modal</span>
   </div>
   <div class="node glow-blue" id="refimg" style="left:355px; top:290px; width:120px;">
     <span class="icon">📸</span>
     <span class="label">Reference Images</span>
+    <span class="brand modal"><span class="brand-dot" style="background:#53b47e"></span>Modal</span>
   </div>
   <div class="node glow-blue" id="pointcloud" style="left:50px; top:420px; width:130px;">
     <span class="icon">☁️</span>
     <span class="label">3D Point Cloud</span>
+    <span class="brand modal"><span class="brand-dot" style="background:#53b47e"></span>Modal</span>
   </div>
   <div class="node glow-blue" id="objdb" style="left:205px; top:420px; width:130px;">
     <span class="icon">🗄️</span>
     <span class="label">Spatial Object DB</span>
     <span class="sub">label → xyz</span>
+    <span class="brand modal"><span class="brand-dot" style="background:#53b47e"></span>Modal</span>
   </div>
   <div class="node glow-blue" id="refdb" style="left:355px; top:420px; width:120px;">
     <span class="icon">🗂️</span>
     <span class="label">Reference DB</span>
+    <span class="brand modal"><span class="brand-dot" style="background:#53b47e"></span>Modal</span>
   </div>
 
   <!-- Online -->
@@ -334,6 +478,7 @@
     <span class="icon">🗣️</span>
     <span class="label">Speech-to-Text</span>
     <span class="sub">Whisper</span>
+    <span class="brand whisper"><span class="brand-dot" style="background:#a0a8c0"></span>OpenAI</span>
   </div>
 
   <!-- Agent -->
@@ -341,6 +486,7 @@
     <span class="icon">🤖</span>
     <span class="label">LLM Agent</span>
     <span class="sub">Tool Calling</span>
+    <span class="brand anthropic" id="llm-brand"><span class="brand-dot" id="llm-brand-dot" style="background:#d97757"></span><span id="llm-brand-name">Claude</span></span>
   </div>
   <div class="node glow-cyan" id="tool-nav" style="left:190px; top:800px; width:150px;">
     <span class="icon">🧭</span>
@@ -351,11 +497,13 @@
     <span class="icon">🏥</span>
     <span class="label">Patient Info</span>
     <span class="sub">EHR / FHIR</span>
+    <span class="brand openevidence"><span class="brand-dot" style="background:#64a0ff"></span>OpenEvidence</span>
   </div>
   <div class="node glow-cyan" id="tool-med" style="left:830px; top:800px; width:150px;">
     <span class="icon">💊</span>
     <span class="label">Medication Lookup</span>
     <span class="sub">web search</span>
+    <span class="brand perplexity"><span class="brand-dot" style="background:#20808d"></span>Perplexity</span>
   </div>
   <div class="node glow-purple" id="response" style="left:520px; top:960px; width:160px;">
     <span class="icon">💬</span>
@@ -364,6 +512,7 @@
   <div class="node glow-purple" id="tts" style="left:520px; top:1060px; width:160px;">
     <span class="icon">🔊</span>
     <span class="label">Text-to-Speech</span>
+    <span class="brand whisper"><span class="brand-dot" style="background:#a0a8c0"></span>OpenAI</span>
   </div>
 
   <!-- Views -->
@@ -382,7 +531,6 @@
   <div class="legend">
     <span><span class="swatch solid"></span>Direct flow</span>
     <span><span class="swatch dashed"></span>Cross-pipeline data</span>
-    <span><span class="swatch particle"></span>Data packet</span>
     <span><span class="source-swatch"></span>Upstream source</span>
     <span><span class="target-swatch"></span>Downstream target</span>
   </div>
@@ -518,7 +666,6 @@ function makePath(x1, y1, x2, y2) {
 }
 
 const pathEls = [];
-const particleEls = [];
 
 edges.forEach(([fromId, toId, type, color]) => {
   const { x1, y1, x2, y2 } = getConnectionPoints(fromId, toId);
@@ -541,39 +688,7 @@ edges.forEach(([fromId, toId, type, color]) => {
 
   edgeSvg.appendChild(path);
   pathEls.push({ path, fromId, toId, type, color });
-
-  const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
-  circle.setAttribute('r', '3');
-  circle.setAttribute('fill', color || '#353a52');
-  circle.setAttribute('opacity', '0');
-  edgeSvg.appendChild(circle);
-  particleEls.push({ circle, path, delay: Math.random() * 5000, speed: 2200 + Math.random() * 2500, color });
 });
-
-// ── Animate particles ──
-let startTime = null;
-function animate(ts) {
-  if (!startTime) startTime = ts;
-  const elapsed = ts - startTime;
-  particleEls.forEach(({ circle, path, delay, speed, color }) => {
-    if (!color) { circle.setAttribute('opacity', '0'); return; }
-    const len = path.getTotalLength();
-    const t = ((elapsed - delay) % speed) / speed;
-    if (t < 0) { circle.setAttribute('opacity', '0'); return; }
-    const pt = path.getPointAtLength(t * len);
-    circle.setAttribute('cx', pt.x);
-    circle.setAttribute('cy', pt.y);
-    let op = 1;
-    if (t < 0.1) op = t / 0.1;
-    if (t > 0.85) op = (1 - t) / 0.15;
-    circle.setAttribute('opacity', Math.max(0, op) * 0.8);
-  });
-  requestAnimationFrame(animate);
-}
-requestAnimationFrame(animate);
-
-// ── Interaction state ──
-let hoverMode = null; // 'pipeline' or 'node'
 
 function getPipeline(id) {
   for (const [k, ids] of Object.entries(pipelineGroups)) {
@@ -596,6 +711,7 @@ function clearAllHighlights() {
 
 document.querySelectorAll('.node').forEach(node => {
   node.addEventListener('mouseenter', (e) => {
+    if (!hoverListenersActive) return;
     clearAllHighlights();
     const nodeId = node.id;
     const pipe = getPipeline(nodeId);
@@ -671,8 +787,244 @@ document.querySelectorAll('.node').forEach(node => {
   });
 
   node.addEventListener('mouseleave', () => {
+    if (!hoverListenersActive) return;
     clearAllHighlights();
   });
+});
+
+// ── Data Flow Paths ──
+const flowPaths = [
+  {
+    name: 'Video → 3D Reconstruction → Point Cloud',
+    nodes: ['glasses', 'video', 'recon', 'pointcloud'],
+  },
+  {
+    name: 'Video → Object Detection → Spatial DB',
+    nodes: ['glasses', 'video', 'objdet', 'objdb'],
+  },
+  {
+    name: 'Video → Visual Odometry → 6DoF Pose → Navigation',
+    nodes: ['glasses', 'video', 'dpvo', 'pose', 'tool-nav'],
+  },
+  {
+    name: 'Video → Re-Localization → 6DoF Pose',
+    nodes: ['glasses', 'video', 'refimg', 'refdb', 'hloc', 'pose'],
+  },
+  {
+    name: 'Video → Object Tracking → Live State → Navigation',
+    nodes: ['glasses', 'video', 'obj-track', 'obj-state', 'tool-nav'],
+  },
+  {
+    name: 'Voice → Speech-to-Text → LLM Agent → Response → TTS → Patient',
+    nodes: ['glasses', 'mic', 'stt', 'llm', 'response', 'tts', 'patient-view'],
+  },
+  {
+    name: 'LLM → Patient Info → Caretaker Dashboard',
+    nodes: ['llm', 'tool-patient', 'response', 'llm', 'caretaker-view'],
+  },
+  {
+    name: 'LLM → Medication Lookup → Response → TTS',
+    nodes: ['llm', 'tool-med', 'response', 'tts', 'patient-view'],
+  },
+  {
+    name: 'LLM → Spatial Navigation → Response',
+    nodes: ['llm', 'tool-nav', 'response'],
+  },
+  {
+    name: '3D Point Cloud + Pose → Caretaker Dashboard',
+    nodes: ['pointcloud', 'caretaker-view'],
+  },
+];
+
+// ── Mode Management ──
+let currentMode = 'explore';
+let flowRunning = false;
+let currentFlowIndex = 0;
+let flowAbort = null; // AbortController-like flag for skipping
+
+const btnExplore = document.getElementById('btn-explore');
+const btnFlow = document.getElementById('btn-flow');
+const flowLabel = document.getElementById('flowLabel');
+const flowNav = document.getElementById('flowNav');
+const flowCounter = document.getElementById('flowCounter');
+function setMode(mode) {
+  currentMode = mode;
+  btnExplore.classList.toggle('active', mode === 'explore');
+  btnFlow.classList.toggle('active', mode === 'flow');
+
+  if (mode === 'explore') {
+    stopFlowAnimation();
+    clearAllHighlights();
+    clearFlowHighlights();
+    flowNav.classList.remove('visible');
+    enableHoverListeners(true);
+  } else {
+    enableHoverListeners(false);
+    clearAllHighlights();
+    startFlowAnimation();
+  }
+}
+
+btnExplore.addEventListener('click', () => setMode('explore'));
+btnFlow.addEventListener('click', () => setMode('flow'));
+
+// ── Hover listener toggle ──
+let hoverListenersActive = true;
+function enableHoverListeners(enabled) {
+  hoverListenersActive = enabled;
+  if (!enabled) clearAllHighlights();
+}
+
+// ── Flow animation helpers ──
+function clearFlowHighlights() {
+  document.querySelectorAll('.node').forEach(n => {
+    n.classList.remove('flow-active', 'flow-visited', 'flow-dimmed');
+    n.style.opacity = '';
+  });
+  pathEls.forEach(({ path }) => {
+    path.classList.remove('flow-lit', 'flow-lit-trail', 'flow-dimmed');
+  });
+}
+
+function findEdgePath(fromId, toId) {
+  return pathEls.find(e => e.fromId === fromId && e.toId === toId);
+}
+
+function scrollToNode(nodeId) {
+  const el = document.getElementById(nodeId);
+  if (!el) return;
+  const rect = el.getBoundingClientRect();
+  const viewH = window.innerHeight;
+  const margin = 120;
+  if (rect.top < margin || rect.bottom > viewH - margin) {
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }
+}
+
+function updateFlowCounter() {
+  flowCounter.textContent = `${currentFlowIndex + 1} / ${flowPaths.length}`;
+}
+
+// Cancellable sleep — resolves false if skipped
+function flowSleep(ms) {
+  return new Promise(resolve => {
+    const id = setTimeout(() => resolve(true), ms);
+    flowAbort = () => { clearTimeout(id); resolve(false); };
+  });
+}
+
+async function animateFlowPath(flowPath) {
+  const { name, nodes } = flowPath;
+  flowLabel.textContent = name;
+  flowNav.classList.add('visible');
+  updateFlowCounter();
+
+  const pathNodeSet = new Set(nodes);
+
+  document.querySelectorAll('.node').forEach(n => {
+    if (!pathNodeSet.has(n.id)) n.classList.add('flow-dimmed');
+  });
+  pathEls.forEach(({ path }) => path.classList.add('flow-dimmed'));
+
+  for (let i = 0; i < nodes.length; i++) {
+    if (!flowRunning) return;
+
+    const nodeId = nodes[i];
+    const el = document.getElementById(nodeId);
+
+    if (i > 0) {
+      const prevId = nodes[i - 1];
+      const edge = findEdgePath(prevId, nodeId);
+      if (edge) {
+        edge.path.classList.remove('flow-dimmed');
+        edge.path.classList.add('flow-lit');
+      }
+      const prevEl = document.getElementById(prevId);
+      prevEl.classList.remove('flow-active');
+      prevEl.classList.add('flow-visited');
+    }
+
+    el.classList.remove('flow-dimmed');
+    el.classList.add('flow-active');
+    scrollToNode(nodeId);
+
+    const ok = await flowSleep(600);
+    if (!ok || !flowRunning) return;
+
+    if (i > 0) {
+      const prevId = nodes[i - 1];
+      const edge = findEdgePath(prevId, nodeId);
+      if (edge) {
+        edge.path.classList.remove('flow-lit');
+        edge.path.classList.add('flow-lit-trail');
+      }
+    }
+  }
+
+  const ok2 = await flowSleep(1200);
+  if (!ok2 || !flowRunning) return;
+
+  clearFlowHighlights();
+  await flowSleep(300);
+}
+
+async function flowLoop() {
+  flowRunning = true;
+  while (flowRunning) {
+    await animateFlowPath(flowPaths[currentFlowIndex]);
+    if (!flowRunning) break;
+    currentFlowIndex = (currentFlowIndex + 1) % flowPaths.length;
+  }
+}
+
+function skipToFlow(idx) {
+  if (currentMode !== 'flow') return;
+  currentFlowIndex = ((idx % flowPaths.length) + flowPaths.length) % flowPaths.length;
+  clearFlowHighlights();
+  if (flowAbort) flowAbort(); // cancel current sleep to restart
+}
+
+function startFlowAnimation() {
+  stopFlowAnimation();
+  flowLoop();
+}
+
+function stopFlowAnimation() {
+  flowRunning = false;
+  if (flowAbort) flowAbort();
+  clearFlowHighlights();
+}
+
+// ── Arrow key navigation ──
+document.addEventListener('keydown', (e) => {
+  if (currentMode === 'flow') {
+    if (e.key === 'ArrowRight') {
+      e.preventDefault();
+      skipToFlow(currentFlowIndex + 1);
+    } else if (e.key === 'ArrowLeft') {
+      e.preventDefault();
+      skipToFlow(currentFlowIndex - 1);
+    }
+  }
+
+  // LLM switcher — works in any mode
+  const llmBrand = document.getElementById('llm-brand');
+  const llmBrandDot = document.getElementById('llm-brand-dot');
+  const llmBrandName = document.getElementById('llm-brand-name');
+
+  if (e.key === 'a' || e.key === 'A') {
+    llmBrand.className = 'brand anthropic';
+    llmBrandDot.style.background = '#d97757';
+    llmBrandName.textContent = 'Claude';
+  } else if (e.key === 's' || e.key === 'S') {
+    llmBrand.className = 'brand openai';
+    llmBrandDot.style.background = '#e4e8f4';
+    llmBrandName.textContent = 'GPT-4o';
+  } else if (e.key === 'd' || e.key === 'D') {
+    llmBrand.className = 'brand gemini';
+    llmBrandDot.style.background = '#4285f4';
+    llmBrandName.textContent = 'Gemini';
+  }
 });
 
 // ── Staggered entrance ──
