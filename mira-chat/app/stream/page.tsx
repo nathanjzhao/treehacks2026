@@ -746,15 +746,18 @@ export default function StreamPage() {
   const [videoReady, setVideoReady] = useState(false);
   const [videoError, setVideoError] = useState<string | null>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
-  const videoRef = useRef<HTMLVideoElement>(null);
+  const videoRef = useRef<HTMLCanvasElement>(null);
   const pidRef = useRef(0);
-  const [yoloEnabled, setYoloEnabled] = useState(true);
+  const [yoloEnabled, setYoloEnabled] = useState(false); // Disabled for canvas rendering
   const [viewSize, setViewSize] = useState({ w: 1920, h: 1080 });
 
-  // YOLO object detection on video feed
-  const { detections, inferenceMs, modelLoaded, modelError } = useDetection(videoRef, {
-    enabled: yoloEnabled && videoReady,
-  });
+  // YOLO object detection on canvas (disabled for now - needs adaptation for canvas)
+  const { detections, inferenceMs, modelLoaded, modelError } = useDetection(
+    videoRef as any, // Cast to work with canvas
+    {
+      enabled: false, // Disabled until canvas support is added
+    }
+  );
 
   useEffect(() => {
     const update = () => setViewSize({ w: window.innerWidth, h: window.innerHeight });
@@ -769,66 +772,97 @@ export default function StreamPage() {
     return () => clearInterval(t);
   }, []);
 
-  // Ray-Ban Android MJPEG stream
+  // Ray-Ban Android stream via Server-Sent Events
   useEffect(() => {
     let cancelled = false;
+    let eventSource: EventSource | null = null;
     let retryTimeout: NodeJS.Timeout;
+    const canvasRef = videoRef as React.RefObject<HTMLCanvasElement>;
 
-    function startAndroidStream() {
-      if (videoRef.current && !cancelled) {
-        console.log("[Stream] Connecting to MJPEG stream...");
+    function startStreamConnection() {
+      if (cancelled) return;
 
-        const imgElement = videoRef.current as HTMLImageElement;
+      console.log("[Stream] Connecting to SSE stream...");
 
-        // Set MJPEG stream as image source
-        imgElement.src = "/api/stream/mjpeg";
+      try {
+        eventSource = new EventSource("/api/stream/ws");
 
-        imgElement.onload = () => {
+        eventSource.onopen = () => {
           if (!cancelled) {
-            console.log("[Stream] MJPEG stream connected and ready");
-            setVideoReady(true);
+            console.log("[Stream] SSE connection established");
             setVideoError(null);
           }
         };
 
-        imgElement.onerror = (err) => {
-          if (!cancelled) {
-            console.error("[Stream] Image error:", err);
-            setVideoError("Android stream not available - retrying...");
+        eventSource.onmessage = (event) => {
+          if (cancelled) return;
 
-            // Retry after 2 seconds
-            retryTimeout = setTimeout(() => {
-              if (!cancelled) {
-                console.log("[Stream] Retrying connection...");
-                startAndroidStream();
-              }
-            }, 2000);
+          try {
+            const data = JSON.parse(event.data);
+
+            if (data.type === "connected") {
+              console.log("[Stream] Connected:", data.clientId);
+              setVideoReady(true);
+            } else if (data.type === "frame") {
+              // Render frame to canvas
+              renderFrame(data);
+            }
+          } catch (e) {
+            console.error("[Stream] Error parsing message:", e);
           }
         };
 
-        // Set a loading timeout - if not loaded after 5 seconds, retry
-        const loadTimeout = setTimeout(() => {
-          if (!cancelled && !videoReady) {
-            console.log("[Stream] Loading timeout, retrying...");
-            imgElement.src = "";
-            setTimeout(() => startAndroidStream(), 500);
-          }
-        }, 5000);
+        eventSource.onerror = (err) => {
+          if (cancelled) return;
 
-        return () => clearTimeout(loadTimeout);
+          console.error("[Stream] SSE error:", err);
+          setVideoError("Stream disconnected - retrying...");
+          setVideoReady(false);
+
+          eventSource?.close();
+
+          // Retry after 2 seconds
+          retryTimeout = setTimeout(() => {
+            if (!cancelled) {
+              console.log("[Stream] Retrying connection...");
+              startStreamConnection();
+            }
+          }, 2000);
+        };
+      } catch (e) {
+        console.error("[Stream] Failed to create EventSource:", e);
+        setVideoError("Failed to connect to stream");
       }
     }
 
-    startAndroidStream();
+    function renderFrame(frameData: any) {
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return;
+
+      // Decode base64 JPEG
+      const img = new Image();
+      img.onload = () => {
+        canvas.width = frameData.width;
+        canvas.height = frameData.height;
+        ctx.drawImage(img, 0, 0);
+      };
+      img.onerror = (err) => {
+        console.error("[Stream] Error loading frame image:", err);
+      };
+      img.src = `data:image/jpeg;base64,${frameData.jpeg_base64}`;
+    }
+
+    startStreamConnection();
 
     return () => {
       cancelled = true;
       clearTimeout(retryTimeout);
-      if (videoRef.current) {
-        (videoRef.current as HTMLImageElement).src = "";
-      }
+      eventSource?.close();
     };
-  }, [videoReady]);
+  }, [videoRef]);
 
   // Supabase realtime — mirror device chat in live mode
   useEffect(() => {
@@ -1070,10 +1104,9 @@ export default function StreamPage() {
 
       {/* ──── VIDEO BACKGROUND (Ray-Ban Android stream) ──── */}
       <div style={{ position: "absolute", inset: 0, zIndex: 0 }}>
-        {/* Live MJPEG stream from Ray-Ban via Android */}
-        <img
-          ref={videoRef as any}
-          alt="Ray-Ban stream"
+        {/* Live stream from Ray-Ban via Android (SSE + Canvas) */}
+        <canvas
+          ref={videoRef as React.RefObject<HTMLCanvasElement>}
           style={{
             position: "absolute",
             inset: 0,
@@ -1103,12 +1136,12 @@ export default function StreamPage() {
         <div style={{ position: "absolute", inset: 0, opacity: 0.03, backgroundImage: "linear-gradient(rgba(120,255,200,0.3) 1px, transparent 1px), linear-gradient(90deg, rgba(120,255,200,0.3) 1px, transparent 1px)", backgroundSize: "60px 60px", animation: "hud-grid-pulse 4s ease-in-out infinite" }} />
         {/* Film grain */}
         <div style={{ position: "absolute", inset: 0, opacity: 0.08, mixBlendMode: "overlay", background: "url(\"data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E\")" }} />
-        {/* YOLO detection overlay */}
-        {videoReady && videoRef.current && (
+        {/* YOLO detection overlay - disabled for canvas mode */}
+        {videoReady && videoRef.current && yoloEnabled && (
           <DetectionOverlay
             detections={detections}
-            videoWidth={videoRef.current.videoWidth || 1920}
-            videoHeight={videoRef.current.videoHeight || 1080}
+            videoWidth={videoRef.current.width || 1920}
+            videoHeight={videoRef.current.height || 1080}
             canvasWidth={viewSize.w}
             canvasHeight={viewSize.h}
             inferenceMs={inferenceMs}

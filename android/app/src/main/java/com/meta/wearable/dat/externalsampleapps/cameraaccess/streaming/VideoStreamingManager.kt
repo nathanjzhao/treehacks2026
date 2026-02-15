@@ -20,6 +20,8 @@ import android.app.Application
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.*
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 
@@ -100,6 +102,9 @@ class VideoStreamingManager(
     private val computerLatencySum = AtomicLong(0)
     private val computerLatencyCount = AtomicInteger(0)
 
+    // Concurrency control for uploads
+    private var computerUploadSemaphore: Semaphore? = null
+
     private val _statistics = MutableStateFlow(StreamingStats())
     val statistics: StateFlow<StreamingStats> = _statistics.asStateFlow()
 
@@ -132,41 +137,61 @@ class VideoStreamingManager(
         )
         android.util.Log.i(TAG, "✅ ComputerStreamDestination created with targetFps=$targetFps")
 
-        // Update status
-        _statistics.update { it.copy(computerStatus = ConnectionStatus.CONNECTING) }
+        // Connect to WebSocket
+        computerDestination?.connect(coroutineScope)?.onSuccess {
+            android.util.Log.i(TAG, "✅ WebSocket connection initiated")
+        }?.onFailure { error ->
+            android.util.Log.e(TAG, "❌ WebSocket connection failed: ${error.message}")
+        }
 
-        // Start collection with parallel/async uploads
+        // Update status
+        _statistics.update { it.copy(computerStatus = com.meta.wearable.dat.externalsampleapps.cameraaccess.streaming.ConnectionStatus.CONNECTING) }
+
+        // Initialize rate limiting and concurrency control
+        val frameIntervalMs = 1000L / targetFps
+        val maxConcurrentUploads = 5  // Match OkHttp connection pool size
+        computerUploadSemaphore = Semaphore(maxConcurrentUploads)
+
+        android.util.Log.w(TAG, "⏱️ Rate limiting: Using .sample(${frameIntervalMs}ms) for ${targetFps} FPS")
+        android.util.Log.w(TAG, "⚙️ Concurrency control: Max ${maxConcurrentUploads} concurrent uploads")
+
+        // Start collection with .sample() for rate limiting
         computerJob = coroutineScope.launch(Dispatchers.IO) {
             try {
-                computerFrameFlow.collect { frameData ->
-                    // Launch upload in parallel (don't block for response)
-                    launch(Dispatchers.IO) {
-                        val sendStartTime = System.currentTimeMillis()
+                @OptIn(kotlinx.coroutines.FlowPreview::class)
+                computerFrameFlow
+                    .sample(frameIntervalMs)
+                    .collect { frameData ->
+                        // Launch upload in parallel with concurrency control
+                        launch(Dispatchers.IO) {
+                            computerUploadSemaphore?.withPermit {
+                                val sendStartTime = System.currentTimeMillis()
 
-                        computerDestination?.sendFrame(
-                            frameData = frameData.data,
-                            width = frameData.width,
-                            height = frameData.height,
-                            timestamp = frameData.timestamp,
-                            frameNumber = frameData.frameNumber
-                        )?.onSuccess {
-                            val latency = System.currentTimeMillis() - sendStartTime
+                                computerDestination?.sendFrame(
+                                    frameData = frameData.data,
+                                    width = frameData.width,
+                                    height = frameData.height,
+                                    timestamp = frameData.timestamp,
+                                    frameNumber = frameData.frameNumber
+                                )?.onSuccess {
+                                    val latency = System.currentTimeMillis() - sendStartTime
 
-                            // Update counters
-                            computerFrameCounter.incrementAndGet()
-                            computerBytesTransferred.addAndGet(frameData.data.size.toLong())
+                                    // Update counters
+                                    computerFrameCounter.incrementAndGet()
+                                    computerBytesTransferred.addAndGet(frameData.data.size.toLong())
 
-                            // Track latency (simple moving average)
-                            computerLatencySum.addAndGet(latency)
-                            computerLatencyCount.incrementAndGet()
+                                    // Track latency (moving average)
+                                    computerLatencySum.addAndGet(latency)
+                                    computerLatencyCount.incrementAndGet()
 
-                            _statistics.update { it.copy(computerStatus = ConnectionStatus.CONNECTED) }
-                        }?.onFailure { error ->
-                            StreamingLogger.error(TAG, "Computer streaming error: ${error.message}")
-                            _statistics.update { it.copy(computerStatus = ConnectionStatus.ERROR) }
+                                    _statistics.update { it.copy(computerStatus = ConnectionStatus.CONNECTED) }
+                                }?.onFailure { error ->
+                                    StreamingLogger.error(TAG, "Computer streaming error: ${error.message}")
+                                    _statistics.update { it.copy(computerStatus = ConnectionStatus.ERROR) }
+                                }
+                            }
                         }
                     }
-                }
             } catch (e: Exception) {
                 StreamingLogger.error(TAG, "Computer streaming job error: ${e.message}")
                 _statistics.update { it.copy(computerStatus = ConnectionStatus.ERROR) }
@@ -179,9 +204,14 @@ class VideoStreamingManager(
      */
     fun disableComputerStreaming() {
         StreamingLogger.info(TAG, "Disabling computer streaming")
+
+        // Disconnect WebSocket
+        computerDestination?.disconnect()
+
         computerJob?.cancel()
         computerJob = null
         computerDestination = null
+        computerUploadSemaphore = null
 
         // Reset counters
         computerFrameCounter.set(0)
@@ -192,7 +222,7 @@ class VideoStreamingManager(
         computerLatencyCount.set(0)
 
         _statistics.update { it.copy(
-            computerStatus = ConnectionStatus.DISCONNECTED,
+            computerStatus = com.meta.wearable.dat.externalsampleapps.cameraaccess.streaming.ConnectionStatus.DISCONNECTED,
             computerFps = 0f,
             computerLatency = 0
         ) }
