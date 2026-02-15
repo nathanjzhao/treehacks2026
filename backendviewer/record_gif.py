@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Records the flowchart data-flow animation as a GIF.
+"""Records the flowchart showcase + data-flow animation as MP4/GIF.
 
 Usage:
     python record_gif.py
@@ -24,7 +24,8 @@ WIDTH = 1920
 HEIGHT = 1080
 FPS = 12
 FRAME_DELAY_MS = 1000 // FPS
-DURATION_SEC = 60
+SHOWCASE_SEC = 14   # cycles through all 6 nodes quickly in headless
+DATAFLOW_SEC = 50   # enough to cycle through flow paths
 OUTPUT = Path(__file__).parent / "flowchart_dataflow.gif"
 HTML_PATH = Path(__file__).parent / "flowchart.html"
 SERVE_DIR = Path(__file__).parent
@@ -40,6 +41,30 @@ def start_server():
     return server
 
 
+async def record_frames(page, duration_sec, label):
+    """Record frames for a given duration."""
+    total_frames = duration_sec * FPS
+    frames: list[Image.Image] = []
+    print(f"Recording {label}: {total_frames} frames at {FPS}fps ({duration_sec}s)...")
+
+    for i in range(total_frames):
+        screenshot = await page.screenshot(type="png")
+        img = Image.open(io.BytesIO(screenshot)).convert("RGBA")
+        rgb = Image.new("RGB", img.size, (8, 9, 13))
+        rgb.paste(img, mask=img.split()[3])
+        frames.append(rgb)
+
+        if i % FPS == 0:
+            sec = i // FPS
+            pct = round(i / total_frames * 100)
+            print(f"  [{label}] {sec}s / {duration_sec}s ({pct}%)", end="\r")
+
+        await asyncio.sleep(FRAME_DELAY_MS / 1000)
+
+    print()
+    return frames
+
+
 async def main():
     server = start_server()
     print(f"Serving on http://127.0.0.1:{PORT}")
@@ -53,43 +78,35 @@ async def main():
         # Wait for entrance animations
         await asyncio.sleep(3)
 
-        # Slow down flow animation for recording (3x slower)
+        # Slow down animations for recording (3x slower)
         await page.evaluate("window.flowSpeedMultiplier = 3")
 
-        # Switch to showcase mode (hotkey 3)
-        await page.keyboard.press("3")
         # Hide mode toggle UI for clean recording
         await page.evaluate("""() => {
             const toggle = document.querySelector('.mode-toggle');
             if (toggle) toggle.style.display = 'none';
         }""")
+
+        # Phase 1: Showcase mode — cycle through all 6 video nodes
+        await page.keyboard.press("3")
         await asyncio.sleep(0.3)
+        showcase_frames = await record_frames(page, SHOWCASE_SEC, "SHOWCASE")
 
-        total_frames = DURATION_SEC * FPS
-        frames: list[Image.Image] = []
-        print(f"Recording {total_frames} frames at {FPS}fps ({DURATION_SEC}s)...")
-
-        for i in range(total_frames):
-            screenshot = await page.screenshot(type="png")
-            img = Image.open(io.BytesIO(screenshot)).convert("RGBA")
-            rgb = Image.new("RGB", img.size, (8, 9, 13))
-            rgb.paste(img, mask=img.split()[3])
-            frames.append(rgb)
-
-            if i % FPS == 0:
-                sec = i // FPS
-                pct = round(i / total_frames * 100)
-                print(f"  {sec}s / {DURATION_SEC}s ({pct}%)", end="\r")
-
-            await asyncio.sleep(FRAME_DELAY_MS / 1000)
+        # Phase 2: Switch to data flow mode
+        await page.keyboard.press("2")
+        await asyncio.sleep(0.5)
+        dataflow_frames = await record_frames(page, DATAFLOW_SEC, "DATA FLOW")
 
         await browser.close()
 
     server.shutdown()
 
-    # Save as mp4 via ffmpeg (pipe PNGs in, get h264 out)
+    all_frames = showcase_frames + dataflow_frames
+    total_duration = SHOWCASE_SEC + DATAFLOW_SEC
+
+    # Save as mp4 via ffmpeg
     mp4_out = OUTPUT.with_suffix('.mp4')
-    print(f"\nEncoding MP4 ({len(frames)} frames)...")
+    print(f"Encoding MP4 ({len(all_frames)} frames, {total_duration}s)...")
     import subprocess
     proc = subprocess.Popen([
         'ffmpeg', '-y',
@@ -100,8 +117,7 @@ async def main():
         '-pix_fmt', 'yuv420p',
         str(mp4_out),
     ], stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
-    import numpy as np
-    for frame in frames:
+    for frame in all_frames:
         proc.stdin.write(frame.tobytes())
     proc.stdin.close()
     proc.wait()
@@ -110,7 +126,7 @@ async def main():
 
     # Also save GIF (lower res for size)
     print("Encoding GIF...")
-    gif_frames = [f.resize((960, 540), Image.LANCZOS) for f in frames]
+    gif_frames = [f.resize((960, 540), Image.LANCZOS) for f in all_frames]
     gif_frames[0].save(
         OUTPUT,
         save_all=True,
