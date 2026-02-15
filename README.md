@@ -19,6 +19,15 @@ Voice-first assisted living platform combining 3D scene understanding, medical k
 | `1` / `2` | Switch EXPLORE / DATA FLOW mode |
 | `←` / `→` | Skip between data flow paths |
 
+
+## Inspiration
+
+Three of us have grandparents with Alzheimer's or dementia. If you've been around it, you know the loop: "Have you seen my pills?" five times in an afternoon. It's not just forgetting — it's the loss of autonomy, the slow erosion of someone's confidence that they can manage their own life.
+
+Many dementia patients refuse traditional care, insisting family handle everything, which puts enormous strain on people who can't be present 24/7. Mira is designed for this gap: asynchronous monitoring without pulling out a phone, assistance at 3 AM, and a caregiver dashboard that keeps family informed.
+
+For someone with Alzheimer's, a searchable spatial memory isn't a convenience. It's dignity.
+
 ## Modules
 
 ### 3D Reconstruction
@@ -51,14 +60,6 @@ Voice-first assisted living platform combining 3D scene understanding, medical k
 | **[securitycam/](securitycam/)** | Security camera streaming — mediamtx config for RTMP/RTSP/HLS/WebRTC ingestion. |
 | **[vic-backend/](vic-backend/)** | Backend services. |
 | **[backendviewer/](backendviewer/)** | Interactive architecture flowchart with animated data flow visualization and video demos. |
-
-## Inspiration
-
-Three of us have grandparents with Alzheimer's or dementia. If you've been around it, you know the loop: "Have you seen my pills?" five times in an afternoon. It's not just forgetting — it's the loss of autonomy, the slow erosion of someone's confidence that they can manage their own life.
-
-Many dementia patients refuse traditional care, insisting family handle everything, which puts enormous strain on people who can't be present 24/7. Mira is designed for this gap: asynchronous monitoring without pulling out a phone, assistance at 3 AM, and a caregiver dashboard that keeps family informed.
-
-For someone with Alzheimer's, a searchable spatial memory isn't a convenience. It's dignity.
 
 ## What's Next
 
