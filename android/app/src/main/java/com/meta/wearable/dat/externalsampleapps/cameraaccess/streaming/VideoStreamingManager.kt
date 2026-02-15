@@ -135,33 +135,36 @@ class VideoStreamingManager(
         // Update status
         _statistics.update { it.copy(computerStatus = ConnectionStatus.CONNECTING) }
 
-        // Start collection
+        // Start collection with parallel/async uploads
         computerJob = coroutineScope.launch(Dispatchers.IO) {
             try {
                 computerFrameFlow.collect { frameData ->
-                    val sendStartTime = System.currentTimeMillis()
+                    // Launch upload in parallel (don't block for response)
+                    launch(Dispatchers.IO) {
+                        val sendStartTime = System.currentTimeMillis()
 
-                    computerDestination?.sendFrame(
-                        frameData = frameData.data,
-                        width = frameData.width,
-                        height = frameData.height,
-                        timestamp = frameData.timestamp,
-                        frameNumber = frameData.frameNumber
-                    )?.onSuccess {
-                        val latency = System.currentTimeMillis() - sendStartTime
+                        computerDestination?.sendFrame(
+                            frameData = frameData.data,
+                            width = frameData.width,
+                            height = frameData.height,
+                            timestamp = frameData.timestamp,
+                            frameNumber = frameData.frameNumber
+                        )?.onSuccess {
+                            val latency = System.currentTimeMillis() - sendStartTime
 
-                        // Update counters
-                        computerFrameCounter.incrementAndGet()
-                        computerBytesTransferred.addAndGet(frameData.data.size.toLong())
+                            // Update counters
+                            computerFrameCounter.incrementAndGet()
+                            computerBytesTransferred.addAndGet(frameData.data.size.toLong())
 
-                        // Track latency (simple moving average)
-                        computerLatencySum.addAndGet(latency)
-                        computerLatencyCount.incrementAndGet()
+                            // Track latency (simple moving average)
+                            computerLatencySum.addAndGet(latency)
+                            computerLatencyCount.incrementAndGet()
 
-                        _statistics.update { it.copy(computerStatus = ConnectionStatus.CONNECTED) }
-                    }?.onFailure { error ->
-                        StreamingLogger.error(TAG, "Computer streaming error: ${error.message}")
-                        _statistics.update { it.copy(computerStatus = ConnectionStatus.ERROR) }
+                            _statistics.update { it.copy(computerStatus = ConnectionStatus.CONNECTED) }
+                        }?.onFailure { error ->
+                            StreamingLogger.error(TAG, "Computer streaming error: ${error.message}")
+                            _statistics.update { it.copy(computerStatus = ConnectionStatus.ERROR) }
+                        }
                     }
                 }
             } catch (e: Exception) {

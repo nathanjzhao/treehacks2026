@@ -99,10 +99,12 @@ class ComputerStreamDestination(
             val latency = System.currentTimeMillis() - startTime
 
             if (response.isSuccessful) {
-                StreamingLogger.info(
-                    TAG,
-                    "Frame #$frameNumber sent successfully (${response.code}, ${latency}ms, ${jpegData.size} bytes)"
-                )
+                // Log every 30th successful frame
+                if (framesSent % 30 == 0) {
+                    val totalFrames = framesSent + framesSkipped
+                    val sendRate = (framesSent.toFloat() / totalFrames * 100).toInt()
+                    android.util.Log.i(TAG, "📊 Stats: Sent ${framesSent} frames (${sendRate}%), Skipped ${framesSkipped} frames, Latest latency: ${latency}ms, Size: ${jpegData.size} bytes")
+                }
                 Result.success(Unit)
             } else {
                 val error = "HTTP ${response.code}: ${response.message}"
