@@ -368,15 +368,40 @@ def localize_frame(image_bytes: bytes, reference_tar: bytes) -> dict:
                 if len(parts) == 2:
                     pairs.append((parts[0], parts[1]))
 
-        # Estimate camera intrinsics from image dimensions
+        # Use the camera model from the reconstruction (SfM-optimized intrinsics)
+        # This is critical — guessing focal length can be 30%+ off
         h_img, w_img = img.shape[:2]
-        focal_length = max(h_img, w_img) * 1.2  # Typical iPhone estimate
-        camera = pycolmap.Camera(
-            model="SIMPLE_PINHOLE",
-            width=w_img,
-            height=h_img,
-            params=[focal_length, w_img / 2, h_img / 2],
-        )
+        rec_cam = list(rec.cameras.values())[0]
+        if rec_cam.width == w_img and rec_cam.height == h_img:
+            camera = rec_cam
+            print(f"Using reconstruction camera: model={camera.model}, params={list(camera.params)[:3]}...")
+        else:
+            # Query image is a different resolution — scale the reconstruction camera
+            sx = w_img / rec_cam.width
+            sy = h_img / rec_cam.height
+            scaled_params = list(rec_cam.params)
+            # Scale focal length(s) and principal point
+            # SIMPLE_RADIAL: [f, cx, cy, k1]
+            # SIMPLE_PINHOLE: [f, cx, cy]
+            # PINHOLE: [fx, fy, cx, cy]
+            # RADIAL: [f, cx, cy, k1, k2]
+            model_name = str(rec_cam.model)
+            if "SIMPLE" in model_name:
+                scaled_params[0] *= (sx + sy) / 2  # focal
+                scaled_params[1] *= sx  # cx
+                scaled_params[2] *= sy  # cy
+            else:
+                scaled_params[0] *= sx  # fx
+                scaled_params[1] *= sy  # fy
+                scaled_params[2] *= sx  # cx
+                scaled_params[3] *= sy  # cy
+            camera = pycolmap.Camera(
+                model=rec_cam.model,
+                width=w_img,
+                height=h_img,
+                params=scaled_params,
+            )
+            print(f"Scaled reconstruction camera: {rec_cam.width}x{rec_cam.height} -> {w_img}x{h_img}")
 
         p2d_all = []
         p3d_all = []
