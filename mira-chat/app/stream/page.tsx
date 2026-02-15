@@ -436,7 +436,7 @@ function ActivityFeed({
         border: "1px solid rgba(120,255,200,0.12)",
         borderRadius: 10,
         overflow: "hidden",
-        maxHeight: 200,
+        maxHeight: 280,
       }}
     >
       {/* Header */}
@@ -483,7 +483,7 @@ function ActivityFeed({
       </div>
 
       {/* Feed lines */}
-      <div ref={feedRef} style={{ overflowY: "auto", maxHeight: 164, padding: "4px 0" }}>
+      <div ref={feedRef} style={{ overflowY: "auto", maxHeight: 244, padding: "4px 0" }}>
         {steps.map((step, i) => {
           const done = finished || i < currentStep;
           const active = !finished && i === currentStep;
@@ -495,7 +495,6 @@ function ActivityFeed({
               className={active ? "hud-fadein" : ""}
               style={{
                 display: "flex",
-                alignItems: "center",
                 gap: 8,
                 padding: "3px 12px",
                 opacity: pending ? 0.2 : 1,
@@ -503,7 +502,7 @@ function ActivityFeed({
               }}
             >
               {/* Status indicator */}
-              <div style={{ width: 16, flexShrink: 0, display: "flex", justifyContent: "center" }}>
+              <div style={{ width: 16, flexShrink: 0, display: "flex", justifyContent: "center", paddingTop: 3 }}>
                 {done ? (
                   <svg width="10" height="10" viewBox="0 0 24 24" fill="none">
                     <path d="M5 13l4 4L19 7" stroke="rgba(120,255,200,0.7)" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
@@ -516,24 +515,63 @@ function ActivityFeed({
               </div>
 
               {/* Icon */}
-              <StepIcon type={step.icon} done={done} active={active} />
+              <div style={{ paddingTop: 2, flexShrink: 0 }}>
+                <StepIcon type={step.icon} done={done} active={active} />
+              </div>
 
-              {/* Label */}
-              <span
-                style={{
-                  fontSize: 12,
-                  fontFamily: "'DM Mono', monospace",
-                  fontWeight: active ? 600 : 400,
-                  color: done ? "rgba(120,255,200,0.8)" : active ? "rgba(255,255,255,0.9)" : "rgba(255,255,255,0.2)",
-                  flex: 1,
-                  minWidth: 0,
-                  overflow: "hidden",
-                  textOverflow: "ellipsis",
-                  whiteSpace: "nowrap",
-                }}
-              >
-                {step.label}
-              </span>
+              {/* Label + detail + searches */}
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <span
+                  style={{
+                    fontSize: 12,
+                    fontFamily: "'DM Mono', monospace",
+                    fontWeight: active ? 600 : 400,
+                    color: done ? "rgba(120,255,200,0.8)" : active ? "rgba(255,255,255,0.9)" : "rgba(255,255,255,0.2)",
+                    display: "block",
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  {step.label}
+                </span>
+                {step.detail && (done || active) && (
+                  <span
+                    style={{
+                      fontSize: 10,
+                      fontFamily: "'DM Mono', monospace",
+                      color: "rgba(255,255,255,0.35)",
+                      display: "block",
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                      marginTop: 1,
+                    }}
+                  >
+                    {step.detail}
+                  </span>
+                )}
+                {step.searches && step.searches.length > 0 && (done || active) && (
+                  <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginTop: 3 }}>
+                    {step.searches.map((s, si) => (
+                      <span
+                        key={si}
+                        style={{
+                          fontSize: 9,
+                          fontFamily: "'DM Mono', monospace",
+                          padding: "1px 6px",
+                          borderRadius: 6,
+                          background: "rgba(120,255,200,0.08)",
+                          border: "1px solid rgba(120,255,200,0.15)",
+                          color: "rgba(120,255,200,0.6)",
+                        }}
+                      >
+                        {s}
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </div>
             </div>
           );
         })}
@@ -671,7 +709,7 @@ interface AssistantMsg extends MsgBase {
   location?: string;
   confidence?: number;
   coords?: { x: number; y: number; z: number };
-  citations?: Array<{ title?: string; url: string }>;
+  citations?: Array<{ title?: string; url: string; evidence_grade?: string }>;
 }
 type Msg = UserMsg | ThinkingMsg | AssistantMsg;
 
@@ -684,12 +722,15 @@ const DEMO_PATIENT_ID = "a1b2c3d4-0001-4000-8000-000000000001";
 function mapStepToIcon(label: string): string {
   const l = label.toLowerCase();
   if (l.includes("interpret")) return "brain";
-  if (l.includes("researching online") || l.includes("perplexity") || l.includes("sonar")) return "globe";
-  if (l.includes("health record") || l.includes("recalling") || l.includes("looking up") || l.includes("researching")) return "search";
+  if (l.includes("searching medical") || l.includes("querying perplexity") || l.includes("sonar")) return "globe";
+  if (l.includes("checking clinical") || l.includes("clinical guidelines")) return "shield";
+  if (l.includes("found") && l.includes("source")) return "check";
+  if (l.includes("health record") || l.includes("recalling") || l.includes("looking up")) return "search";
   if (l.includes("thinking") || l.includes("analyzing")) return "brain";
   if (l.includes("searching for")) return "camera";
   if (l.includes("alert") || l.includes("caregiver")) return "phone";
   if (l.includes("composing") || l.includes("generating")) return "sparkle";
+  if (l.includes("researching")) return "globe";
   return "brain";
 }
 

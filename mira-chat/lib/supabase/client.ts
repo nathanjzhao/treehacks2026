@@ -14,7 +14,8 @@ export type EventType =
   | "OBJECT_LOCATED"
   | "OBJECT_NOT_FOUND"
   | "ESCALATED"
-  | "WEB_SEARCH_COMPLETED";
+  | "WEB_SEARCH_COMPLETED"
+  | "CLINICAL_GUIDELINE_CHECKED";
 
 export type Severity = "GREEN" | "YELLOW" | "ORANGE" | "RED";
 

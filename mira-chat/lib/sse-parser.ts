@@ -17,7 +17,7 @@ export interface SSECallbacks {
     request_id?: string;
     object_name?: string;
     event_id?: string;
-    citations?: Array<{ title?: string; url: string }>;
+    citations?: Array<{ title?: string; url: string; evidence_grade?: string }>;
   }) => void;
   onError?: (error: Error) => void;
 }

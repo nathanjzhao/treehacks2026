@@ -1,9 +1,15 @@
 "use client";
 
 interface CitationCardProps {
-  citation: { title?: string; url: string };
+  citation: { title?: string; url: string; evidence_grade?: string };
   variant?: "light" | "dark";
 }
+
+const GRADE_CONFIG: Record<string, { label: string; bg: string; text: string; darkBg: string; darkText: string }> = {
+  clinical: { label: "CLINICAL", bg: "bg-emerald-100", text: "text-emerald-700", darkBg: "rgba(16,185,129,0.2)", darkText: "rgba(110,231,183,0.95)" },
+  health_info: { label: "HEALTH INFO", bg: "bg-blue-100", text: "text-blue-700", darkBg: "rgba(59,130,246,0.2)", darkText: "rgba(147,197,253,0.95)" },
+  general: { label: "WEB", bg: "bg-slate-100", text: "text-slate-500", darkBg: "rgba(148,163,184,0.15)", darkText: "rgba(203,213,225,0.7)" },
+};
 
 export default function CitationCard({
   citation,
@@ -51,17 +57,37 @@ export default function CitationCard({
           style={{ borderRadius: 3, flexShrink: 0 }}
         />
         <div style={{ minWidth: 0, flex: 1 }}>
-          <div
-            style={{
-              fontSize: 12,
-              color: "rgba(120,255,200,0.9)",
-              fontWeight: 600,
-              overflow: "hidden",
-              textOverflow: "ellipsis",
-              whiteSpace: "nowrap",
-            }}
-          >
-            {displayTitle}
+          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <span
+              style={{
+                fontSize: 12,
+                color: "rgba(120,255,200,0.9)",
+                fontWeight: 600,
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
+                flex: 1,
+                minWidth: 0,
+              }}
+            >
+              {displayTitle}
+            </span>
+            {citation.evidence_grade && GRADE_CONFIG[citation.evidence_grade] && (
+              <span
+                style={{
+                  fontSize: 8,
+                  fontWeight: 700,
+                  padding: "1px 5px",
+                  borderRadius: 4,
+                  background: GRADE_CONFIG[citation.evidence_grade].darkBg,
+                  color: GRADE_CONFIG[citation.evidence_grade].darkText,
+                  letterSpacing: "0.05em",
+                  flexShrink: 0,
+                }}
+              >
+                {GRADE_CONFIG[citation.evidence_grade].label}
+              </span>
+            )}
           </div>
           <div
             style={{
@@ -109,8 +135,18 @@ export default function CitationCard({
         className="rounded-sm shrink-0"
       />
       <div className="min-w-0 flex-1">
-        <div className="text-[12px] font-semibold text-slate-700 group-hover:text-teal-700 truncate">
-          {displayTitle}
+        <div className="flex items-center gap-1.5">
+          <span className="text-[12px] font-semibold text-slate-700 group-hover:text-teal-700 truncate">
+            {displayTitle}
+          </span>
+          {citation.evidence_grade && GRADE_CONFIG[citation.evidence_grade] && (
+            <span
+              className={`text-[8px] font-bold px-1.5 py-0.5 rounded ${GRADE_CONFIG[citation.evidence_grade].bg} ${GRADE_CONFIG[citation.evidence_grade].text} shrink-0`}
+              style={{ letterSpacing: "0.05em" }}
+            >
+              {GRADE_CONFIG[citation.evidence_grade].label}
+            </span>
+          )}
         </div>
         <div className="text-[10px] text-slate-400 font-mono truncate">
           {hostname}

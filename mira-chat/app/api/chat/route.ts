@@ -75,7 +75,7 @@ const TOOLS = [
     function: {
       name: "search_medical_info",
       description:
-        "Search for current medical information online using Perplexity. Use this when the resident asks about medication side effects, drug interactions, general health questions, symptoms, recent medical guidelines, or anything requiring current medical knowledge that isn't available in their patient record. Do NOT use this for finding physical objects or emergencies.",
+        "Search for current medical information online using Perplexity. Use this when the resident asks about medication side effects, drug interactions, general health questions, symptoms, or anything requiring current medical knowledge that isn't available in their patient record. Do NOT use this for finding physical objects or emergencies.",
       parameters: {
         type: "object",
         properties: {
@@ -86,6 +86,30 @@ const TOOLS = [
           },
         },
         required: ["query"],
+      },
+    },
+  },
+  {
+    type: "function" as const,
+    function: {
+      name: "check_clinical_guidelines",
+      description:
+        "Look up clinical guidelines, treatment protocols, drug interactions, dosing information, and evidence-based care recommendations. Use this when the resident or caregiver asks about treatment guidelines, clinical protocols, drug interactions, appropriate dosing, or evidence-based best practices. Prefer this over search_medical_info for clinical/guideline questions.",
+      parameters: {
+        type: "object",
+        properties: {
+          condition: {
+            type: "string",
+            description:
+              "The condition, treatment, or clinical topic to look up guidelines for",
+          },
+          context: {
+            type: "string",
+            description:
+              "Optional additional clinical context (e.g. 'elderly patient with renal impairment')",
+          },
+        },
+        required: ["condition"],
       },
     },
   },
@@ -220,6 +244,159 @@ async function callSonar(
 }
 
 // ────────────────────────────────────────────────────────────────
+// Evidence grading — classify citation source credibility
+// ────────────────────────────────────────────────────────────────
+
+type EvidenceGrade = "clinical" | "health_info" | "general";
+
+interface GradedCitation {
+  title?: string;
+  url: string;
+  evidence_grade: EvidenceGrade;
+}
+
+const CLINICAL_DOMAINS = [
+  "pubmed.ncbi.nlm.nih.gov", "ncbi.nlm.nih.gov", "nih.gov", "who.int",
+  "fda.gov", "cdc.gov", "cochranelibrary.com", "cochrane.org",
+  "uptodate.com", "bmj.com", "thelancet.com", "nejm.org",
+  "jamanetwork.com", "mayoclinic.org", "nature.com", "springer.com",
+  "wiley.com", "ama-assn.org", "acc.org", "heart.org", "diabetes.org",
+  "aafp.org", "acponline.org", "drugs.com", "rxlist.com",
+  "clinicaltrials.gov", "nice.org.uk",
+];
+
+const HEALTH_INFO_DOMAINS = [
+  "webmd.com", "healthline.com", "medlineplus.gov", "clevelandclinic.org",
+  "hopkinsmedicine.org", "mountsinai.org", "nhs.uk",
+  "medicalnewstoday.com", "verywellhealth.com", "everydayhealth.com",
+];
+
+function classifyEvidence(url: string): EvidenceGrade {
+  try {
+    const hostname = new URL(url).hostname.replace("www.", "").toLowerCase();
+    for (const domain of CLINICAL_DOMAINS) {
+      if (hostname === domain || hostname.endsWith("." + domain)) return "clinical";
+    }
+    for (const domain of HEALTH_INFO_DOMAINS) {
+      if (hostname === domain || hostname.endsWith("." + domain)) return "health_info";
+    }
+    return "general";
+  } catch {
+    return "general";
+  }
+}
+
+function gradeCitations(
+  citations: Array<{ title?: string; url: string }>
+): GradedCitation[] {
+  return citations.map((c) => ({
+    ...c,
+    evidence_grade: classifyEvidence(c.url),
+  }));
+}
+
+// ────────────────────────────────────────────────────────────────
+// Clinical Guidelines — specialized Sonar call for evidence-based care
+// ────────────────────────────────────────────────────────────────
+
+interface ClinicalResult {
+  answer: string;
+  citations: GradedCitation[];
+  evidence_level: "high" | "moderate" | "low";
+}
+
+async function callSonarClinical(
+  condition: string,
+  context: string | undefined,
+  patientCard: PatientCardShape
+): Promise<ClinicalResult> {
+  const apiKey = process.env.OPENROUTER_API_KEY;
+  if (!apiKey) throw new Error("OPENROUTER_API_KEY not configured");
+
+  const patientContext = [
+    patientCard.demographics?.age_range
+      ? `Patient: ${patientCard.demographics.age_range} year old`
+      : "",
+    patientCard.demographics?.sex || "",
+    patientCard.conditions?.length
+      ? `Conditions: ${patientCard.conditions.map((c) => c.name).join(", ")}`
+      : "",
+    patientCard.meds?.length
+      ? `Current medications: ${patientCard.meds.map((m) => m.name).join(", ")}`
+      : "",
+  ]
+    .filter(Boolean)
+    .join(". ");
+
+  const fullQuery = [
+    patientContext,
+    context ? `Clinical context: ${context}` : "",
+    `Clinical guidelines for: ${condition}`,
+  ]
+    .filter(Boolean)
+    .join(". ");
+
+  const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+      "HTTP-Referer":
+        process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000",
+      "X-Title": "Mira",
+    },
+    body: JSON.stringify({
+      model: "perplexity/sonar",
+      messages: [
+        {
+          role: "system",
+          content: `You are a clinical decision support assistant for an assisted living facility.
+Prioritize peer-reviewed sources: PubMed, Cochrane, NEJM, JAMA, Lancet, BMJ.
+Reference clinical guidelines from major organizations (ADA, AHA, ACC, AGS Beers Criteria).
+Include strength of recommendation when available (Grade A/B/C).
+Note geriatric-specific considerations (renal dosing, fall risk, polypharmacy).
+Keep answers concise (3-5 sentences) and evidence-focused.
+End with: "Clinical review recommended before any care changes."`,
+        },
+        { role: "user", content: fullQuery },
+      ],
+      temperature: 0.2,
+      max_tokens: 600,
+    }),
+  });
+
+  if (!res.ok) {
+    const errText = await res.text();
+    console.error("[Sonar Clinical] Error:", res.status, errText);
+    throw new Error(`Sonar Clinical API error: ${res.status}`);
+  }
+
+  const data = await res.json();
+  const choice = data.choices?.[0];
+  const answer = choice?.message?.content || "No clinical guidelines found.";
+
+  // Log token usage
+  const usage = data.usage;
+  if (usage) {
+    console.log(`[Sonar Clinical] tokens: ${usage.prompt_tokens}in + ${usage.completion_tokens}out = ${usage.total_tokens} | cost: $${(usage.cost ?? 0).toFixed(4)} | model: perplexity/sonar`);
+  }
+
+  const rawCitations = data.citations || [];
+  const citations: Array<{ title?: string; url: string }> = rawCitations.map(
+    (c: string | { url: string; title?: string }) =>
+      typeof c === "string" ? { url: c } : c
+  );
+
+  const graded = gradeCitations(citations);
+  const clinicalCount = graded.filter((c) => c.evidence_grade === "clinical").length;
+  const ratio = graded.length > 0 ? clinicalCount / graded.length : 0;
+  const evidence_level: "high" | "moderate" | "low" =
+    ratio >= 0.5 ? "high" : ratio >= 0.25 ? "moderate" : "low";
+
+  return { answer, citations: graded.slice(0, 4), evidence_level };
+}
+
+// ────────────────────────────────────────────────────────────────
 // Explorer 3D Object Finder (teammate's viewer at /ws/chat)
 // ────────────────────────────────────────────────────────────────
 
@@ -327,6 +504,8 @@ TOOLS - YOU MUST USE THEM:
 - If the resident can't find something or asks where something is → call find_object
 - If there's ANY safety concern (pain, falls, breathing, emergencies) → call escalate_to_caregiver IMMEDIATELY
 - If they ask about a specific medication → call lookup_medication to give accurate details
+- If they ask about treatment guidelines, drug interactions, clinical protocols, dosing → call check_clinical_guidelines
+- For general health questions, symptoms, side effects → call search_medical_info
 - You can call multiple tools if needed (e.g. "my chest hurts and I can't find my inhaler" → escalate + find_object)
 
 GUARDRAILS:
@@ -655,7 +834,10 @@ async function executeTool(
       const query = args.query;
 
       try {
+        onStatus?.(`Querying Perplexity Sonar: "${query}"`);
         const sonarResult = await callSonar(query, patientCard);
+        const graded = gradeCitations(sonarResult.citations).slice(0, 4);
+        onStatus?.(`Found ${graded.length} sources`);
 
         await appendEvent({
           patient_id,
@@ -664,7 +846,7 @@ async function executeTool(
           receipt_text: `Researched: ${query}`,
           payload: {
             query,
-            citations: sonarResult.citations,
+            citations: graded,
             source_model: "perplexity/sonar",
           },
           source: "backend",
@@ -674,7 +856,7 @@ async function executeTool(
           action: "ANSWER",
           toolOutput: JSON.stringify({
             answer: sonarResult.answer,
-            citations: sonarResult.citations,
+            citations: graded,
             disclaimer:
               "This is general medical information. Always consult your healthcare provider.",
           }),
@@ -687,6 +869,53 @@ async function executeTool(
             error: "Web search temporarily unavailable",
             fallback:
               "I couldn't look that up right now. Please ask your caregiver for detailed medical information.",
+          }),
+        };
+      }
+    }
+
+    case "check_clinical_guidelines": {
+      const condition = args.condition;
+      const context = args.context;
+
+      try {
+        onStatus?.(`Searching clinical guidelines for: ${condition}`);
+        const result = await callSonarClinical(condition, context, patientCard);
+        onStatus?.(`Found ${result.citations.length} sources (evidence: ${result.evidence_level})`);
+
+        await appendEvent({
+          patient_id,
+          type: "CLINICAL_GUIDELINE_CHECKED" as any,
+          severity: "GREEN",
+          receipt_text: `Clinical guideline check: ${condition}`,
+          payload: {
+            condition,
+            context,
+            citations: result.citations,
+            evidence_level: result.evidence_level,
+            source_model: "perplexity/sonar",
+          },
+          source: "backend",
+        });
+
+        return {
+          action: "ANSWER",
+          toolOutput: JSON.stringify({
+            answer: result.answer,
+            citations: result.citations,
+            evidence_level: result.evidence_level,
+            disclaimer:
+              "Clinical review recommended before any care changes.",
+          }),
+        };
+      } catch (err) {
+        console.error("[Sonar Clinical] Search failed:", err);
+        return {
+          action: "ANSWER",
+          toolOutput: JSON.stringify({
+            error: "Clinical guideline search temporarily unavailable",
+            fallback:
+              "I couldn't look up those guidelines right now. Please consult your healthcare provider.",
           }),
         };
       }
@@ -724,6 +953,7 @@ function getDemoResponse(message: string, card: PatientCardShape): string {
 
 function toolLabel(name: string, args: Record<string, any>): {
   label: string;
+  detail?: string;
   searches?: string[];
 } {
   switch (name) {
@@ -735,16 +965,25 @@ function toolLabel(name: string, args: Record<string, any>): {
     case "escalate_to_caregiver":
       return {
         label: "Alerting caregiver",
+        detail: args.reason || undefined,
       };
     case "lookup_medication":
       return {
         label: "Looking up medication",
+        detail: `Query: "${args.medication_query || "medication"}"`,
         searches: [args.medication_query || "medication"],
       };
     case "search_medical_info":
       return {
-        label: "Researching online",
+        label: "Searching medical sources",
+        detail: `Query: "${args.query || ""}"`,
         searches: [args.query || "medical info"],
+      };
+    case "check_clinical_guidelines":
+      return {
+        label: "Checking clinical guidelines",
+        detail: `Condition: ${args.condition || ""}`,
+        searches: [args.condition || "clinical guidelines"],
       };
     default:
       return { label: name };
@@ -882,8 +1121,8 @@ export async function POST(request: NextRequest) {
             const toolResults: ToolResult[] = [];
             for (const tc of firstResponse.toolCalls) {
               const args = JSON.parse(tc.function.arguments);
-              const { label, searches } = toolLabel(tc.function.name, args);
-              emitStep(label, "active", undefined, searches);
+              const { label, detail, searches } = toolLabel(tc.function.name, args);
+              emitStep(label, "active", detail, searches);
 
               // Pass onStatus callback so explorer can emit sub-steps
               const result = await executeTool(
@@ -913,7 +1152,8 @@ export async function POST(request: NextRequest) {
 
             // Collect citations from Sonar results
             for (let ti = 0; ti < firstResponse.toolCalls.length; ti++) {
-              if (firstResponse.toolCalls[ti].function.name === "search_medical_info") {
+              const toolName = firstResponse.toolCalls[ti].function.name;
+              if (toolName === "search_medical_info" || toolName === "check_clinical_guidelines") {
                 try {
                   const parsed = JSON.parse(toolResults[ti].toolOutput);
                   if (parsed.citations) citations = parsed.citations;
