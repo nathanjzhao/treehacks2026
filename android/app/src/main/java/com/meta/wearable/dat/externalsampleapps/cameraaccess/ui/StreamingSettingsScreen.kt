@@ -13,6 +13,7 @@
 
 package com.meta.wearable.dat.externalsampleapps.cameraaccess.ui
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
@@ -24,6 +25,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.meta.wearable.dat.externalsampleapps.cameraaccess.stream.StreamViewModel
@@ -49,6 +51,7 @@ fun StreamingSettingsScreen(
     var cloudEnabled by remember { mutableStateOf(config.cloud.enabled) }
 
     var targetFps by remember { mutableStateOf(config.settings.computerTargetFps.toFloat()) }
+    var sdkFrameRate by remember { mutableStateOf(config.settings.sdkFrameRate) }
     var jpegQuality by remember { mutableStateOf(config.settings.jpegQuality.toFloat()) }
 
     Scaffold(
@@ -84,19 +87,59 @@ fun StreamingSettingsScreen(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text(
-                            "Computer Streaming",
-                            style = MaterialTheme.typography.titleMedium
-                        )
+                        Column {
+                            Text(
+                                "Computer Streaming",
+                                style = MaterialTheme.typography.titleMedium
+                            )
+                            // Real-time status indicator
+                            uiState.streamingStats?.let { stats ->
+                                Row(
+                                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    // Status dot
+                                    Box(
+                                        modifier = Modifier
+                                            .size(8.dp)
+                                            .background(
+                                                color = when (stats.computerStatus) {
+                                                    com.meta.wearable.dat.externalsampleapps.cameraaccess.streaming.ConnectionStatus.CONNECTED ->
+                                                        MaterialTheme.colorScheme.primary
+                                                    com.meta.wearable.dat.externalsampleapps.cameraaccess.streaming.ConnectionStatus.CONNECTING ->
+                                                        MaterialTheme.colorScheme.tertiary
+                                                    com.meta.wearable.dat.externalsampleapps.cameraaccess.streaming.ConnectionStatus.ERROR ->
+                                                        MaterialTheme.colorScheme.error
+                                                    else -> MaterialTheme.colorScheme.onSurfaceVariant
+                                                },
+                                                shape = MaterialTheme.shapes.small
+                                            )
+                                    )
+                                    Text(
+                                        when (stats.computerStatus) {
+                                            com.meta.wearable.dat.externalsampleapps.cameraaccess.streaming.ConnectionStatus.CONNECTED ->
+                                                "Connected · ${String.format("%.1f", stats.computerFps)} FPS · ${stats.computerLatency}ms"
+                                            com.meta.wearable.dat.externalsampleapps.cameraaccess.streaming.ConnectionStatus.CONNECTING ->
+                                                "Connecting..."
+                                            com.meta.wearable.dat.externalsampleapps.cameraaccess.streaming.ConnectionStatus.ERROR ->
+                                                "Error - Check connection"
+                                            else -> "Disconnected"
+                                        },
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                        }
                         Switch(
                             checked = computerEnabled,
                             onCheckedChange = { enabled ->
                                 computerEnabled = enabled
                                 scope.launch {
-                                    if (enabled) {
+                                    if (enabled && computerIp.isNotEmpty()) {
                                         streamViewModel.enableComputerStreaming(
                                             computerIp,
-                                            computerPort.toIntOrNull() ?: 8080
+                                            computerPort.toIntOrNull() ?: 3000
                                         )
                                     } else {
                                         streamViewModel.disableComputerStreaming()
@@ -107,44 +150,51 @@ fun StreamingSettingsScreen(
                     }
 
                     Text(
-                        "Stream to computer via phone hotspot for VGGT 3D reconstruction",
+                        "Stream video to web application via Tailscale network",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
 
                     OutlinedTextField(
                         value = computerIp,
-                        onValueChange = { computerIp = it },
-                        label = { Text("IP Address") },
-                        placeholder = { Text("172.20.10.1") },
-                        modifier = Modifier.fillMaxWidth(),
-                        enabled = computerEnabled
+                        onValueChange = { newIp ->
+                            computerIp = newIp
+                            // Auto-apply if streaming is enabled
+                            if (computerEnabled && newIp.isNotEmpty()) {
+                                scope.launch {
+                                    streamViewModel.enableComputerStreaming(
+                                        newIp,
+                                        computerPort.toIntOrNull() ?: 3000
+                                    )
+                                }
+                            }
+                        },
+                        label = { Text("Tailscale IP Address") },
+                        placeholder = { Text("100.x.x.x") },
+                        supportingText = { Text("Your computer's Tailscale IP") },
+                        modifier = Modifier.fillMaxWidth()
                     )
 
                     OutlinedTextField(
                         value = computerPort,
-                        onValueChange = { computerPort = it },
-                        label = { Text("Port") },
-                        placeholder = { Text("8080") },
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                        modifier = Modifier.fillMaxWidth(),
-                        enabled = computerEnabled
-                    )
-
-                    Button(
-                        onClick = {
-                            scope.launch {
-                                streamViewModel.enableComputerStreaming(
-                                    computerIp,
-                                    computerPort.toIntOrNull() ?: 8080
-                                )
+                        onValueChange = { newPort ->
+                            computerPort = newPort
+                            // Auto-apply if streaming is enabled
+                            if (computerEnabled && computerIp.isNotEmpty()) {
+                                scope.launch {
+                                    streamViewModel.enableComputerStreaming(
+                                        computerIp,
+                                        newPort.toIntOrNull() ?: 3000
+                                    )
+                                }
                             }
                         },
-                        enabled = computerEnabled,
+                        label = { Text("Port") },
+                        placeholder = { Text("3000") },
+                        supportingText = { Text("Next.js dev server port") },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                         modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Text("Save Computer Settings")
-                    }
+                    )
                 }
             }
 
@@ -222,10 +272,24 @@ fun StreamingSettingsScreen(
                         style = MaterialTheme.typography.titleMedium
                     )
 
-                    Text(
-                        "Target FPS: ${targetFps.toInt()}",
-                        style = MaterialTheme.typography.bodyMedium
-                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            "Target FPS (Computer Stream)",
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                        Text(
+                            "${targetFps.toInt()} FPS",
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
+                            color = if (targetFps < 15) MaterialTheme.colorScheme.error
+                            else if (targetFps < 25) MaterialTheme.colorScheme.tertiary
+                            else MaterialTheme.colorScheme.primary
+                        )
+                    }
                     Slider(
                         value = targetFps,
                         onValueChange = { targetFps = it },
@@ -233,8 +297,40 @@ fun StreamingSettingsScreen(
                         steps = 28,
                         modifier = Modifier.fillMaxWidth()
                     )
+                    if (targetFps < 15) {
+                        Text(
+                            "⚠️ Low FPS setting detected! Increase to 25-30 for smooth streaming.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error
+                        )
+                    } else {
+                        Text(
+                            "Higher FPS = smoother video but more bandwidth. Recommended: 25-30 FPS.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
                     Text(
-                        "Higher FPS = better 3D reconstruction but more battery usage",
+                        "SDK Frame Rate",
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        listOf(15, 24, 30).forEach { fps ->
+                            FilterChip(
+                                selected = sdkFrameRate == fps,
+                                onClick = { sdkFrameRate = fps },
+                                label = { Text("${fps} FPS") }
+                            )
+                        }
+                    }
+                    Text(
+                        "Higher FPS = smoother video, more battery usage",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -263,6 +359,7 @@ fun StreamingSettingsScreen(
                             scope.launch {
                                 streamViewModel.updateQualitySettings(
                                     targetFps.toInt(),
+                                    sdkFrameRate,
                                     jpegQuality.toInt()
                                 )
                             }
@@ -274,82 +371,167 @@ fun StreamingSettingsScreen(
                 }
             }
 
-            // Connection Status Section
+            // Live Statistics Section
             Card {
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
                     Text(
-                        "Connection Status",
+                        "Live Statistics",
                         style = MaterialTheme.typography.titleMedium
                     )
 
                     uiState.streamingStats?.let { stats ->
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Text("Computer:")
-                            Text(
-                                "${stats.computerStatus} (${stats.computerFps} FPS)",
-                                color = when (stats.computerStatus) {
-                                    com.meta.wearable.dat.externalsampleapps.cameraaccess.streaming.ConnectionStatus.CONNECTED ->
-                                        MaterialTheme.colorScheme.primary
-                                    com.meta.wearable.dat.externalsampleapps.cameraaccess.streaming.ConnectionStatus.ERROR ->
-                                        MaterialTheme.colorScheme.error
-                                    else -> MaterialTheme.colorScheme.onSurfaceVariant
+                        // Computer Metrics (only show if enabled)
+                        if (computerEnabled) {
+                            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Text(
+                                    "Computer Stream",
+                                    style = MaterialTheme.typography.titleSmall,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Text(
+                                        "Frame Rate:",
+                                        style = MaterialTheme.typography.bodyMedium
+                                    )
+                                    Text(
+                                        String.format("%.1f FPS", stats.computerFps),
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
+                                        color = if (stats.computerFps > 0) MaterialTheme.colorScheme.primary
+                                        else MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
                                 }
-                            )
-                        }
 
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Text("Cloud:")
-                            Text(
-                                "${stats.cloudStatus} (${stats.cloudFps} FPS)",
-                                color = when (stats.cloudStatus) {
-                                    com.meta.wearable.dat.externalsampleapps.cameraaccess.streaming.ConnectionStatus.CONNECTED ->
-                                        MaterialTheme.colorScheme.primary
-                                    com.meta.wearable.dat.externalsampleapps.cameraaccess.streaming.ConnectionStatus.ERROR ->
-                                        MaterialTheme.colorScheme.error
-                                    else -> MaterialTheme.colorScheme.onSurfaceVariant
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Text(
+                                        "Latency:",
+                                        style = MaterialTheme.typography.bodyMedium
+                                    )
+                                    Text(
+                                        "${stats.computerLatency}ms",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = when {
+                                            stats.computerLatency == 0L -> MaterialTheme.colorScheme.onSurfaceVariant
+                                            stats.computerLatency < 150 -> MaterialTheme.colorScheme.primary
+                                            stats.computerLatency < 300 -> MaterialTheme.colorScheme.tertiary
+                                            else -> MaterialTheme.colorScheme.error
+                                        }
+                                    )
                                 }
-                            )
+
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Text(
+                                        "Bandwidth:",
+                                        style = MaterialTheme.typography.bodyMedium
+                                    )
+                                    Text(
+                                        String.format("%.1f KB/s", stats.bandwidthKBps),
+                                        style = MaterialTheme.typography.bodyMedium
+                                    )
+                                }
+                            }
+
+                            HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
                         }
 
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Text("Bandwidth:")
-                            Text("${stats.bandwidthKBps} KB/s")
+                        // Cloud Metrics (only show if enabled)
+                        if (cloudEnabled) {
+                            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Text(
+                                    "Cloud Stream",
+                                    style = MaterialTheme.typography.titleSmall,
+                                    color = MaterialTheme.colorScheme.tertiary
+                                )
+
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Text(
+                                        "Status:",
+                                        style = MaterialTheme.typography.bodyMedium
+                                    )
+                                    Text(
+                                        "${stats.cloudStatus}",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = when (stats.cloudStatus) {
+                                            com.meta.wearable.dat.externalsampleapps.cameraaccess.streaming.ConnectionStatus.CONNECTED ->
+                                                MaterialTheme.colorScheme.primary
+                                            com.meta.wearable.dat.externalsampleapps.cameraaccess.streaming.ConnectionStatus.ERROR ->
+                                                MaterialTheme.colorScheme.error
+                                            else -> MaterialTheme.colorScheme.onSurfaceVariant
+                                        }
+                                    )
+                                }
+                            }
+
+                            HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
                         }
 
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Text("Dropped Frames:")
-                            Text("${stats.droppedFrames}")
-                        }
+                        // General Stats
+                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text(
+                                    "Dropped Frames:",
+                                    style = MaterialTheme.typography.bodyMedium
+                                )
+                                Text(
+                                    "${stats.droppedFrames}",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = if (stats.droppedFrames > 0) MaterialTheme.colorScheme.error
+                                    else MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
 
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Text("Uptime:")
-                            Text("${stats.uptimeSeconds}s")
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text(
+                                    "Session Uptime:",
+                                    style = MaterialTheme.typography.bodyMedium
+                                )
+                                Text(
+                                    "${stats.uptimeSeconds / 60}m ${stats.uptimeSeconds % 60}s",
+                                    style = MaterialTheme.typography.bodyMedium
+                                )
+                            }
                         }
-                    } ?: Text(
-                        "No statistics available",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                    } ?: Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Text(
+                            "No active streams",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            "Enable computer or cloud streaming to see live statistics",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                        )
+                    }
                 }
             }
         }

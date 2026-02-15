@@ -769,41 +769,66 @@ export default function StreamPage() {
     return () => clearInterval(t);
   }, []);
 
-  // Webcam video feed — swap this for Ray-Ban JPEG stream later
+  // Ray-Ban Android MJPEG stream
   useEffect(() => {
-    let stream: MediaStream | null = null;
     let cancelled = false;
+    let retryTimeout: NodeJS.Timeout;
 
-    async function startCamera() {
-      try {
-        stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: "environment", width: { ideal: 1920 }, height: { ideal: 1080 } },
-          audio: false,
-        });
-        if (cancelled) {
-          stream.getTracks().forEach((t) => t.stop());
-          return;
-        }
-        if (videoRef.current) {
-          videoRef.current.srcObject = stream;
-          setVideoReady(true);
-        }
-      } catch (err) {
-        if (!cancelled) {
-          setVideoError(err instanceof Error ? err.message : "Camera not available");
-        }
+    function startAndroidStream() {
+      if (videoRef.current && !cancelled) {
+        console.log("[Stream] Connecting to MJPEG stream...");
+
+        const imgElement = videoRef.current as HTMLImageElement;
+
+        // Set MJPEG stream as image source
+        imgElement.src = "/api/stream/mjpeg";
+
+        imgElement.onload = () => {
+          if (!cancelled) {
+            console.log("[Stream] MJPEG stream connected and ready");
+            setVideoReady(true);
+            setVideoError(null);
+          }
+        };
+
+        imgElement.onerror = (err) => {
+          if (!cancelled) {
+            console.error("[Stream] Image error:", err);
+            setVideoError("Android stream not available - retrying...");
+
+            // Retry after 2 seconds
+            retryTimeout = setTimeout(() => {
+              if (!cancelled) {
+                console.log("[Stream] Retrying connection...");
+                startAndroidStream();
+              }
+            }, 2000);
+          }
+        };
+
+        // Set a loading timeout - if not loaded after 5 seconds, retry
+        const loadTimeout = setTimeout(() => {
+          if (!cancelled && !videoReady) {
+            console.log("[Stream] Loading timeout, retrying...");
+            imgElement.src = "";
+            setTimeout(() => startAndroidStream(), 500);
+          }
+        }, 5000);
+
+        return () => clearTimeout(loadTimeout);
       }
     }
 
-    startCamera();
+    startAndroidStream();
 
     return () => {
       cancelled = true;
-      if (stream) {
-        stream.getTracks().forEach((t) => t.stop());
+      clearTimeout(retryTimeout);
+      if (videoRef.current) {
+        (videoRef.current as HTMLImageElement).src = "";
       }
     };
-  }, []);
+  }, [videoReady]);
 
   // Supabase realtime — mirror device chat in live mode
   useEffect(() => {
@@ -1043,14 +1068,12 @@ export default function StreamPage() {
         ::-webkit-scrollbar{width:3px}::-webkit-scrollbar-thumb{background:rgba(255,255,255,0.1);border-radius:3px}
       `}</style>
 
-      {/* ──── VIDEO BACKGROUND (webcam now, Ray-Ban stream later) ──── */}
+      {/* ──── VIDEO BACKGROUND (Ray-Ban Android stream) ──── */}
       <div style={{ position: "absolute", inset: 0, zIndex: 0 }}>
-        {/* Live camera feed */}
-        <video
-          ref={videoRef}
-          autoPlay
-          playsInline
-          muted
+        {/* Live MJPEG stream from Ray-Ban via Android */}
+        <img
+          ref={videoRef as any}
+          alt="Ray-Ban stream"
           style={{
             position: "absolute",
             inset: 0,

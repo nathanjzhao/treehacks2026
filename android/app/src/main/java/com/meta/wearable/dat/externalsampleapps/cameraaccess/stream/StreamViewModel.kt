@@ -85,11 +85,12 @@ class StreamViewModel(
   fun startStream() {
     videoJob?.cancel()
     stateJob?.cancel()
+    val settings = _uiState.value.streamingConfiguration.settings
     val streamSession =
         Wearables.startStreamSession(
                 getApplication(),
                 deviceSelector,
-                StreamConfiguration(videoQuality = VideoQuality.MEDIUM, 24),
+                StreamConfiguration(videoQuality = VideoQuality.HIGH, settings.sdkFrameRate),
             )
             .also { streamSession = it }
     videoJob = viewModelScope.launch { streamSession.videoStream.collect { handleVideoFrame(it) } }
@@ -408,13 +409,38 @@ class StreamViewModel(
     )
   }
 
-  suspend fun updateQualitySettings(targetFps: Int, jpegQuality: Int) {
+  suspend fun updateQualitySettings(targetFps: Int, sdkFrameRate: Int, jpegQuality: Int) {
+    val currentConfig = _uiState.value.streamingConfiguration
+    val wasComputerEnabled = currentConfig.computer.enabled
+    val wasCloudEnabled = currentConfig.cloud.enabled
+
+    // Update settings
     streamingPreferences.updateSettings(
-        _uiState.value.streamingConfiguration.settings.copy(
+        currentConfig.settings.copy(
             computerTargetFps = targetFps,
+            sdkFrameRate = sdkFrameRate,
             jpegQuality = jpegQuality
         )
     )
+
+    // Restart computer streaming if it was enabled (to apply new FPS/quality)
+    if (wasComputerEnabled) {
+      android.util.Log.i("StreamViewModel", "Restarting computer streaming with new settings: ${targetFps}fps, ${jpegQuality}% quality")
+      videoStreamingManager.disableComputerStreaming()
+      kotlinx.coroutines.delay(100) // Brief delay to ensure cleanup
+      videoStreamingManager.enableComputerStreaming(
+          endpoint = currentConfig.computer.ip,
+          port = currentConfig.computer.port,
+          targetFps = targetFps,
+          jpegQuality = jpegQuality
+      )
+    }
+
+    // Restart SDK stream if frame rate changed
+    if (sdkFrameRate != currentConfig.settings.sdkFrameRate) {
+      android.util.Log.i("StreamViewModel", "Restarting SDK stream with new frame rate: ${sdkFrameRate}fps")
+      // Stream will be restarted on next startStream() call with updated settings
+    }
   }
 
   fun getStreamingStats(): StateFlow<com.meta.wearable.dat.externalsampleapps.cameraaccess.streaming.StreamingStats> {
