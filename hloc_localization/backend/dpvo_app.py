@@ -330,7 +330,7 @@ def _align_dpvo_to_world(dpvo_poses, dpvo_tstamps, hloc_anchors):
 @app.function(
     image=dpvo_image,
     gpu="A100",
-    timeout=600,
+    timeout=1800,
     memory=32768,
 )
 def run_dpvo_odometry(
@@ -426,21 +426,24 @@ def run_dpvo_odometry(
     # Localizing many frames gives Umeyama a robust fit.
     localize_fn = modal.Function.from_name("hloc-localization", "localize_frame")
 
-    # Localize every 3rd frame (gives ~10 anchors for 29 frames)
+    # 3 spread-out HLoc anchors (first, middle, last) for Umeyama similarity alignment.
+    # Wide baseline gives robust scale recovery. Adjacent frames (e.g. [0,1,2]) have
+    # tiny DPVO displacement making scale noisy. Minimum 2 anchors needed for scale;
+    # 1 anchor gives position+orientation but no scale (bad for monocular DPVO).
     n = len(frames)
-    anchor_interval = max(1, min(3, n // 4))
-    anchor_indices = list(range(0, n, anchor_interval))
-    # Always include the last frame
-    if anchor_indices[-1] != n - 1:
-        anchor_indices.append(n - 1)
+    anchor_indices = sorted(set([0, n // 2, n - 1]))
 
     print(f"Localizing {len(anchor_indices)} frames with HLoc: {anchor_indices}")
-    hloc_anchors = []  # list of (frame_idx, pose_dict)
 
+    anchor_jpgs = []
     for idx in anchor_indices:
-        frame = frames[idx]
-        _, jpg = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 95])
-        pose = localize_fn.remote(jpg.tobytes(), reference_tar)
+        _, jpg = cv2.imencode(".jpg", frames[idx], [cv2.IMWRITE_JPEG_QUALITY, 95])
+        anchor_jpgs.append(jpg.tobytes())
+
+    hloc_anchors = []
+    args_list = [(jpg, reference_tar) for jpg in anchor_jpgs]
+    results = list(localize_fn.starmap(args_list))
+    for idx, pose in zip(anchor_indices, results):
         if pose.get("success"):
             hloc_anchors.append((idx, pose))
             print(f"  Frame {idx}: t=({pose['tx']:.3f}, {pose['ty']:.3f}, {pose['tz']:.3f}), "
@@ -455,7 +458,7 @@ def run_dpvo_odometry(
             "hloc_anchors": [{"frame_idx": idx, **p} for idx, p in hloc_anchors],
         }
 
-    anchor_pose = hloc_anchors[0][1]  # primary anchor for reporting
+    anchor_pose = hloc_anchors[0][1]
     print(f"Successfully localized {len(hloc_anchors)}/{len(anchor_indices)} frames")
 
     # --- Free memory before DPVO ---
