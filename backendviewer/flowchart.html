@@ -277,7 +277,8 @@
     transition: all 0.25s;
   }
   .mode-toggle button:first-child { border-radius: 6px 0 0 6px; }
-  .mode-toggle button:last-child { border-radius: 0 6px 6px 0; border-left: none; }
+  .mode-toggle button:last-child { border-radius: 0 6px 6px 0; }
+  .mode-toggle button + button { border-left: none; }
   .mode-toggle button.active {
     background: rgba(6,182,212,0.1);
     border-color: var(--cyan);
@@ -332,6 +333,39 @@
   .flow-nav .key:hover {
     background: #252838;
     color: #fff;
+  }
+
+  /* Showcase mode — flashy pulse */
+  .node.showcase-active {
+    border-color: var(--pink) !important;
+    box-shadow:
+      0 0 30px rgba(236,72,153,0.35),
+      0 0 60px rgba(236,72,153,0.15),
+      inset 0 0 20px rgba(236,72,153,0.05) !important;
+    transform: scale(1.08);
+    z-index: 12;
+    animation: showcase-glow 1.5s ease infinite;
+  }
+  @keyframes showcase-glow {
+    0%, 100% { box-shadow: 0 0 30px rgba(236,72,153,0.35), 0 0 60px rgba(236,72,153,0.15); }
+    50% { box-shadow: 0 0 40px rgba(236,72,153,0.5), 0 0 80px rgba(236,72,153,0.25); }
+  }
+  .node.showcase-dimmed {
+    opacity: 0.08 !important;
+  }
+  .edge-line.showcase-dimmed {
+    opacity: 0.03 !important;
+  }
+  .edge-line.showcase-lit {
+    stroke: rgba(236,72,153,0.6) !important;
+    stroke-width: 2.5 !important;
+    opacity: 1 !important;
+  }
+
+  .mode-toggle button.active-showcase {
+    background: rgba(236,72,153,0.1);
+    border-color: var(--pink);
+    color: var(--pink);
   }
 
   /* Brand badges */
@@ -445,6 +479,7 @@
 <div class="mode-toggle">
   <button id="btn-explore" class="active">EXPLORE</button>
   <button id="btn-flow">DATA FLOW</button>
+  <button id="btn-showcase">SHOWCASE</button>
 </div>
 <div class="flow-nav" id="flowNav">
   <div class="flow-keys"><span class="key" id="btn-prev">←</span><span class="key" id="btn-next">→</span></div>
@@ -458,7 +493,7 @@
   <div class="region offline" style="left:30px;  top:230px; width:460px; height:370px;"><div class="region-label">① Offline Processing</div></div>
   <div class="region online"  style="left:520px; top:120px; width:690px; height:520px;"><div class="region-label">② Online Processing (real-time)</div></div>
   <div class="region agent"   style="left:160px; top:710px; width:920px; height:440px;"><div class="region-label">③ LLM Agent + Tools</div></div>
-  <div class="region views"   style="left:100px; top:1320px; width:1040px; height:280px;"><div class="region-label">User Interfaces</div></div>
+  <div class="region views"   style="left:300px; top:1320px; width:540px; height:280px;"><div class="region-label">Patient Experience</div></div>
 
   <!-- ═══ SVG EDGES ═══ -->
   <svg class="edges" id="edgeSvg">
@@ -590,15 +625,10 @@
   </div>
 
   <!-- Views -->
-  <div class="node glow-green" id="patient-view" style="left:170px; top:1380px; width:280px;">
+  <div class="node glow-green" id="patient-view" style="left:400px; top:1380px; width:340px;">
     <span class="icon">👤</span>
-    <span class="label">Patient View</span>
-    <span class="sub">Camera feed · Chat log · Audio</span>
-  </div>
-  <div class="node glow-purple" id="caretaker-view" style="left:680px; top:1380px; width:280px;">
-    <span class="icon">🩺</span>
-    <span class="label">Caretaker Dashboard</span>
-    <span class="sub">3D map · Tracking · Records · Alerts</span>
+    <span class="label">Patient Experience</span>
+    <span class="sub">Camera feed · Chat log · Audio · 3D Map · Scene Graph</span>
   </div>
 
   <!-- Legend -->
@@ -635,7 +665,7 @@ const edges = [
 
   // Video → Online
   ['video', 'dpvo', 'solid', null],
-  ['video', 'hloc', 'solid', null],
+  ['video', 'hloc', 'solid', null, [[500, 150], [700, 155], [790, 180]]],
   ['video', 'depth', 'solid', null],
 
   // Online internal — localization
@@ -660,7 +690,6 @@ const edges = [
 
   // Online → Agent
   ['pose', 'tool-nav', 'data', '#22c55e'],
-  ['obj-track', 'caretaker-view', 'data', '#22c55e'],
   ['objdb', 'tool-nav', 'data', '#3b82f6'],
   ['recon', 'tool-nav', 'data', '#3b82f6'],
 
@@ -681,11 +710,9 @@ const edges = [
   // Output → Views
   ['tts', 'patient-view', 'solid', null],
 
-  // Caretaker feeds
-  ['recon', 'caretaker-view', 'data', '#3b82f6'],
-  ['pose', 'caretaker-view', 'data', '#22c55e'],
-  ['tool-patient', 'caretaker-view', 'data', '#a855f7'],
-  ['llm', 'caretaker-view', 'data', '#a855f7'],
+  // 3D feeds → Patient Experience (routed along left side to avoid agent region)
+  ['recon', 'patient-view', 'data', '#3b82f6', [[60, 700], [60, 1200], [350, 1400]]],
+  ['objdb', 'patient-view', 'data', '#3b82f6', [[130, 700], [100, 1200], [380, 1420]]],
 ];
 
 const pipelineGroups = {
@@ -693,7 +720,7 @@ const pipelineGroups = {
   offline: ['recon', 'objdet', 'refimg', 'objdb'],
   online: ['dpvo', 'hloc', 'depth', 'masks', 'obj-track', 'pose', 'stt'],
   agent: ['llm', 'tool-nav', 'tool-patient', 'tool-med', 'response', 'tts'],
-  views: ['patient-view', 'caretaker-view'],
+  views: ['patient-view'],
 };
 
 // Build adjacency index
@@ -774,9 +801,43 @@ function makePath(x1, y1, x2, y2) {
 
 const pathEls = [];
 
-edges.forEach(([fromId, toId, type, color]) => {
-  const { x1, y1, x2, y2 } = getConnectionPoints(fromId, toId);
-  const d = makePath(x1, y1, x2, y2);
+// Catmull-Rom to cubic bezier conversion for smooth waypoint paths
+function catmullRomToBezier(pts, tension) {
+  tension = tension || 0.5;
+  const n = pts.length;
+  if (n < 2) return `M ${pts[0][0]} ${pts[0][1]}`;
+  if (n === 2) return makePath(pts[0][0], pts[0][1], pts[1][0], pts[1][1]);
+
+  let d = `M ${pts[0][0]} ${pts[0][1]}`;
+  for (let i = 0; i < n - 1; i++) {
+    const p0 = pts[Math.max(i - 1, 0)];
+    const p1 = pts[i];
+    const p2 = pts[i + 1];
+    const p3 = pts[Math.min(i + 2, n - 1)];
+
+    const cp1x = p1[0] + (p2[0] - p0[0]) * tension / 3;
+    const cp1y = p1[1] + (p2[1] - p0[1]) * tension / 3;
+    const cp2x = p2[0] - (p3[0] - p1[0]) * tension / 3;
+    const cp2y = p2[1] - (p3[1] - p1[1]) * tension / 3;
+
+    d += ` C ${cp1x} ${cp1y}, ${cp2x} ${cp2y}, ${p2[0]} ${p2[1]}`;
+  }
+  return d;
+}
+
+edges.forEach(([fromId, toId, type, color, waypoints]) => {
+  let d;
+  if (waypoints && waypoints.length > 0) {
+    const f = getNodeRect(fromId);
+    const t = getNodeRect(toId);
+    // Pick smart exit/entry points
+    const { x1, y1, x2, y2 } = getConnectionPoints(fromId, toId);
+    const allPts = [[x1, y1], ...waypoints, [x2, y2]];
+    d = catmullRomToBezier(allPts, 0.5);
+  } else {
+    const { x1, y1, x2, y2 } = getConnectionPoints(fromId, toId);
+    d = makePath(x1, y1, x2, y2);
+  }
 
   const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
   path.setAttribute('d', d);
@@ -956,8 +1017,8 @@ const flowPaths = [
     nodes: ['glasses', 'mic', 'stt', 'llm', 'response', 'tts', 'patient-view'],
   },
   {
-    name: 'LLM → Patient Info → Caretaker Dashboard',
-    nodes: ['llm', 'tool-patient', 'response', 'llm', 'caretaker-view'],
+    name: 'LLM → Patient Info → Response → TTS → Patient',
+    nodes: ['llm', 'tool-patient', 'response', 'tts', 'patient-view'],
   },
   {
     name: 'LLM → Medication Lookup → Response → TTS',
@@ -968,8 +1029,8 @@ const flowPaths = [
     nodes: ['llm', 'tool-nav', 'response'],
   },
   {
-    name: '3D Reconstruction + Pose → Caretaker Dashboard',
-    nodes: ['recon', 'caretaker-view'],
+    name: '3D Reconstruction + Scene Graph → Patient Experience',
+    nodes: ['recon', 'objdb', 'patient-view'],
   },
 ];
 
@@ -982,29 +1043,43 @@ let flowSkipped = false; // set true when user manually skips
 
 const btnExplore = document.getElementById('btn-explore');
 const btnFlow = document.getElementById('btn-flow');
+const btnShowcase = document.getElementById('btn-showcase');
 const flowLabel = document.getElementById('flowLabel');
 const flowNav = document.getElementById('flowNav');
 const flowCounter = document.getElementById('flowCounter');
+
 function setMode(mode) {
+  // Stop any running animation from previous mode
+  stopFlowAnimation();
+  stopShowcase();
+  clearAllHighlights();
+  clearFlowHighlights();
+  clearShowcaseHighlights();
+  hideVideoPreview();
+  flowNav.classList.remove('visible');
+
   currentMode = mode;
-  btnExplore.classList.toggle('active', mode === 'explore');
-  btnFlow.classList.toggle('active', mode === 'flow');
+  btnExplore.classList.remove('active', 'active-showcase');
+  btnFlow.classList.remove('active', 'active-showcase');
+  btnShowcase.classList.remove('active', 'active-showcase');
 
   if (mode === 'explore') {
-    stopFlowAnimation();
-    clearAllHighlights();
-    clearFlowHighlights();
-    flowNav.classList.remove('visible');
+    btnExplore.classList.add('active');
     enableHoverListeners(true);
-  } else {
+  } else if (mode === 'flow') {
+    btnFlow.classList.add('active');
     enableHoverListeners(false);
-    clearAllHighlights();
     startFlowAnimation();
+  } else if (mode === 'showcase') {
+    btnShowcase.classList.add('active-showcase');
+    enableHoverListeners(false);
+    startShowcase();
   }
 }
 
 btnExplore.addEventListener('click', () => setMode('explore'));
 btnFlow.addEventListener('click', () => setMode('flow'));
+btnShowcase.addEventListener('click', () => setMode('showcase'));
 
 // ── Hover listener toggle ──
 let hoverListenersActive = true;
@@ -1139,6 +1214,90 @@ function stopFlowAnimation() {
   clearFlowHighlights();
 }
 
+// ── Showcase Mode ──
+let showcaseRunning = false;
+let showcaseAbort = null;
+let showcaseIndex = 0;
+const showcaseNodeIds = []; // filled after nodeVideoMap is defined (see below)
+
+function clearShowcaseHighlights() {
+  document.querySelectorAll('.node').forEach(n => {
+    n.classList.remove('showcase-active', 'showcase-dimmed');
+    n.style.opacity = '';
+  });
+  pathEls.forEach(({ path }) => {
+    path.classList.remove('showcase-lit', 'showcase-dimmed');
+  });
+}
+
+function showcaseSleep(ms) {
+  return new Promise(resolve => {
+    const id = setTimeout(() => resolve(true), ms);
+    showcaseAbort = () => { clearTimeout(id); resolve(false); };
+  });
+}
+
+async function showcaseLoop() {
+  showcaseRunning = true;
+  while (showcaseRunning) {
+    const nodeId = showcaseNodeIds[showcaseIndex];
+    clearShowcaseHighlights();
+
+    const pipe = getPipeline(nodeId);
+    const group = pipe ? pipelineGroups[pipe] : [];
+    const sources = incomingEdges[nodeId] || [];
+    const targets = outgoingEdges[nodeId] || [];
+    const connected = new Set([...sources, ...targets, nodeId, ...group]);
+
+    // Dim non-connected nodes, show connected ones
+    document.querySelectorAll('.node').forEach(n => {
+      if (!connected.has(n.id)) {
+        n.classList.add('showcase-dimmed');
+      }
+    });
+
+    // Light connected edges, dim the rest
+    pathEls.forEach(({ path, fromId, toId }) => {
+      const isDirectEdge = (fromId === nodeId || toId === nodeId);
+      const isPipeEdge = group.includes(fromId) && group.includes(toId);
+      if (isDirectEdge) {
+        path.classList.add('showcase-lit');
+      } else if (!isPipeEdge) {
+        path.classList.add('showcase-dimmed');
+      }
+    });
+
+    // Highlight the active node
+    const el = document.getElementById(nodeId);
+    el.classList.add('showcase-active');
+    scrollToNode(nodeId);
+    showVideoPreview(nodeId, true);
+
+    // Show label in flow nav
+    const mapping = nodeVideoMap[nodeId];
+    flowLabel.textContent = mapping ? mapping.label : nodeId;
+    flowCounter.textContent = `${showcaseIndex + 1} / ${showcaseNodeIds.length}`;
+    flowNav.classList.add('visible');
+
+    const ok = await showcaseSleep(2400);
+    if (!ok || !showcaseRunning) break;
+
+    showcaseIndex = (showcaseIndex + 1) % showcaseNodeIds.length;
+  }
+}
+
+function startShowcase() {
+  stopShowcase();
+  showcaseRunning = true;
+  showcaseLoop();
+}
+
+function stopShowcase() {
+  showcaseRunning = false;
+  if (showcaseAbort) showcaseAbort();
+  clearShowcaseHighlights();
+}
+
 // ── Arrow key navigation ──
 document.addEventListener('keydown', (e) => {
   if (currentMode === 'flow') {
@@ -1150,10 +1309,24 @@ document.addEventListener('keydown', (e) => {
       skipToFlow(currentFlowIndex - 1);
     }
   }
+  if (currentMode === 'showcase') {
+    if (e.key === 'ArrowRight') {
+      e.preventDefault();
+      showcaseIndex = (showcaseIndex + 1) % showcaseNodeIds.length;
+      clearShowcaseHighlights();
+      if (showcaseAbort) showcaseAbort();
+    } else if (e.key === 'ArrowLeft') {
+      e.preventDefault();
+      showcaseIndex = (showcaseIndex - 1 + showcaseNodeIds.length) % showcaseNodeIds.length;
+      clearShowcaseHighlights();
+      if (showcaseAbort) showcaseAbort();
+    }
+  }
 
   // Mode hotkeys
   if (e.key === '1') { setMode('explore'); return; }
   if (e.key === '2') { setMode('flow'); return; }
+  if (e.key === '3') { setMode('showcase'); return; }
 
   // LLM switcher — works in any mode
   const llmBrand = document.getElementById('llm-brand');
@@ -1213,22 +1386,27 @@ const nodeVideoMap = {
 Object.keys(nodeVideoMap).forEach(id => {
   const el = document.getElementById(id);
   if (el) el.classList.add('has-video');
+  showcaseNodeIds.push(id);
 });
 
 const videoPreview = document.getElementById('videoPreview');
 const previewVideo = document.getElementById('previewVideo');
 const previewLabel = document.getElementById('previewLabel');
 
-function showVideoPreview(nodeId) {
+function showVideoPreview(nodeId, swap) {
   const mapping = nodeVideoMap[nodeId];
   if (!mapping) return;
   if (activeVideoNode === nodeId) return;
+  const wasVisible = !!activeVideoNode;
   activeVideoNode = nodeId;
   previewLabel.textContent = mapping.label;
   previewVideo.src = mapping.src;
   previewVideo.playbackRate = mapping.speed || 1;
   previewVideo.play().catch(() => {});
-  videoPreview.classList.add('visible');
+  if (!wasVisible || !swap) {
+    // Fresh open — animate in
+    videoPreview.classList.add('visible');
+  }
   document.body.classList.remove('video-shift-default', 'video-shift-none', 'video-shift-far');
   document.body.classList.add('video-shift-' + (mapping.shift || 'default'));
   // Auto-scroll to keep the active node visible in the left half
