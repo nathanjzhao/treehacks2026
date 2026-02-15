@@ -159,7 +159,7 @@ class ComputerStreamDestination(
             .build()
 
         return Request.Builder()
-            .url("http://$endpoint:$port/frame")
+            .url("http://$endpoint:$port/api/stream/frame")
             .post(requestBody)
             .build()
     }
