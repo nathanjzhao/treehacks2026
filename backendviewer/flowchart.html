@@ -592,7 +592,7 @@ const edges = [
 
   // Cross-pipeline: offline → online
   ['refimg', 'hloc', 'data', '#3b82f6'],
-  ['objdet', 'masks', 'data', '#3b82f6'],  // object masks from detection
+  ['video', 'masks', 'solid', null],  // video stream feeds object masking
 
   // STT → LLM
   ['stt', 'llm', 'solid', null],
@@ -901,7 +901,7 @@ const flowPaths = [
   },
   {
     name: 'Video → Depth + Masks + Pose → Object Tracking → Live State',
-    nodes: ['glasses', 'video', 'depth', 'obj-track', 'obj-state'],
+    nodes: ['glasses', 'video', 'depth', 'masks', 'obj-track', 'obj-state'],
   },
   {
     name: 'Voice → Speech-to-Text → LLM Agent → Response → TTS → Patient',
