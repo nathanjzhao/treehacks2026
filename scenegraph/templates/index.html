@@ -3,119 +3,14 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>OpenFunGraph Viewer + Chat</title>
+<title>OpenFunGraph Viewer</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
-  body { display: flex; height: 100vh; background: #1e1e1e; color: #e0e0e0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
-
-  /* Left: 3D viewer iframe */
-  #viewer { flex: 1; border: none; min-width: 0; }
-
-  /* Right: chat panel */
-  #chat-panel {
-    width: 380px; min-width: 300px; max-width: 480px;
-    display: flex; flex-direction: column;
-    border-left: 1px solid #333;
-    background: #252526;
-  }
-  #chat-header {
-    padding: 14px 16px; font-weight: 600; font-size: 15px;
-    border-bottom: 1px solid #333; background: #2d2d2d;
-  }
-  #messages {
-    flex: 1; overflow-y: auto; padding: 16px;
-    display: flex; flex-direction: column; gap: 10px;
-  }
-  .msg {
-    max-width: 90%; padding: 10px 14px; border-radius: 12px;
-    font-size: 14px; line-height: 1.45; word-wrap: break-word;
-  }
-  .msg.user {
-    align-self: flex-end; background: #0078d4; color: #fff;
-    border-bottom-right-radius: 4px;
-  }
-  .msg.assistant {
-    align-self: flex-start; background: #3c3c3c; color: #e0e0e0;
-    border-bottom-left-radius: 4px;
-  }
-  .msg .role { font-size: 11px; opacity: 0.7; margin-bottom: 3px; }
-
-  #input-bar {
-    display: flex; padding: 12px; gap: 8px;
-    border-top: 1px solid #333; background: #2d2d2d;
-  }
-  #input-bar input {
-    flex: 1; padding: 10px 14px; border-radius: 8px; border: 1px solid #444;
-    background: #1e1e1e; color: #e0e0e0; font-size: 14px; outline: none;
-  }
-  #input-bar input:focus { border-color: #0078d4; }
-  #input-bar button {
-    padding: 10px 18px; border-radius: 8px; border: none;
-    background: #0078d4; color: #fff; font-size: 14px; cursor: pointer;
-    font-weight: 500;
-  }
-  #input-bar button:hover { background: #006bbd; }
-  #input-bar button:disabled { opacity: 0.5; cursor: default; }
-
-  #empty-state { margin: auto; text-align: center; opacity: 0.4; font-size: 14px; }
+  body { height: 100vh; background: #1e1e1e; }
+  #viewer { width: 100%; height: 100%; border: none; }
 </style>
 </head>
 <body>
-
 <iframe id="viewer" src="http://localhost:{{ viser_port }}"></iframe>
-
-<div id="chat-panel">
-  <div id="chat-header">Chat</div>
-  <div id="messages">
-    <div id="empty-state">Ask anything about the functional scene graph</div>
-  </div>
-  <div id="input-bar">
-    <input id="chat-input" type="text" placeholder="Type a message..." autocomplete="off" />
-    <button id="send-btn">Send</button>
-  </div>
-</div>
-
-<script>
-const messages = document.getElementById('messages');
-const input = document.getElementById('chat-input');
-const sendBtn = document.getElementById('send-btn');
-const emptyState = document.getElementById('empty-state');
-
-let ws;
-function connect() {
-  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  ws = new WebSocket(`${proto}://${location.host}/ws/chat`);
-  ws.onmessage = (e) => {
-    const data = JSON.parse(e.data);
-    addMessage(data.role, data.content);
-  };
-  ws.onclose = () => setTimeout(connect, 2000);
-}
-connect();
-
-function addMessage(role, text) {
-  if (emptyState) emptyState.remove();
-  const div = document.createElement('div');
-  div.className = `msg ${role}`;
-  const roleLabel = document.createElement('div');
-  roleLabel.className = 'role';
-  roleLabel.textContent = role === 'user' ? 'You' : 'Assistant';
-  div.appendChild(roleLabel);
-  div.appendChild(document.createTextNode(text));
-  messages.appendChild(div);
-  messages.scrollTop = messages.scrollHeight;
-}
-
-function send() {
-  const text = input.value.trim();
-  if (!text || !ws || ws.readyState !== WebSocket.OPEN) return;
-  addMessage('user', text);
-  ws.send(JSON.stringify({ message: text }));
-  input.value = '';
-}
-
-sendBtn.addEventListener('click', send);
-input.addEventListener('keydown', (e) => { if (e.key === 'Enter') send(); });
-</script>
 </body>
 </html>
