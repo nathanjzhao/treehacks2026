@@ -283,7 +283,11 @@ def main():
         frame_store[stem] = store
         print(f"  {stem}: {n} frames loaded ({', '.join(store.keys())})")
 
-    options_html = "\n".join(f'<option value="{s}">{s}</option>' for s in stems)
+    default_stem = "IMG_4723" if "IMG_4723" in stems else stems[0]
+    options_html = "\n".join(
+        f'<option value="{s}"{" selected" if s == default_stem else ""}>{s}</option>'
+        for s in stems
+    )
     page_html = PAGE_HTML.replace("{{OPTIONS}}", options_html)
 
     @app.get("/", response_class=HTMLResponse)
