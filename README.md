@@ -10,14 +10,6 @@ Voice-first assisted living platform combining 3D scene understanding, medical k
 
 <video src="https://github.com/user-attachments/assets/a5fb430a-5176-4695-9428-8e3962875725" autoplay loop muted playsinline width="100%"></video>
 
-[Interactive version](backendviewer/flowchart.html) — click nodes to see video demos of each pipeline stage.
-
-**Modes:** EXPLORE (hover/click to inspect connections) · DATA FLOW (animated walkthrough of each pipeline)
-
-| Key | Action |
-|-----|--------|
-| `1` / `2` | Switch EXPLORE / DATA FLOW mode |
-| `←` / `→` | Skip between data flow paths |
 
 
 ## Inspiration
@@ -59,13 +51,12 @@ For someone with Alzheimer's, a searchable spatial memory isn't a convenience. I
 | **[android/](android/)** | Android client app — receives Bluetooth audio + JPEG frames from Ray-Ban Meta glasses, bridges to backend via Tailscale. |
 | **[securitycam/](securitycam/)** | Security camera streaming — mediamtx config for RTMP/RTSP/HLS/WebRTC ingestion. |
 | **[vic-backend/](vic-backend/)** | Backend services. |
-| **[backendviewer/](backendviewer/)** | Interactive architecture flowchart with animated data flow visualization and video demos. |
 
 ## Team
 
 | Member | Contributions |
 |--------|--------------|
-| **Nathan** | ML pipeline & GPU compute on Modal — object localization, 3D scene reconstruction, camera pose tracking with visual odometry. Backend flowchart viewer, security cam integration, point cloud viewer. |
+| **Nathan** | ML pipeline & GPU compute on Modal — object localization, 3D scene reconstruction, camera pose tracking with visual odometry. Security cam integration, point cloud viewer. |
 | **Victor** | Streaming video and audio from the Ray-Ban Meta SDK, linking to frontend, delivering audio feedback back to the user. |
 | **Madhuhaas** | Agentic system and tool-calling pipeline — pulling patient info, web search for medication lookup. Frontend development. |
 | **Antonio** | Online object localization, animated camera fly-to in the 3D viewer, high-level pitch direction, demo video editing. |
